@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Glossary — Spring Boot + ActiveMQ</title>
+  <link rel="stylesheet" href="../assets/style.css">
+  <style>
+    .glossary-term {
+      font-weight: 600;
+      color: var(--accent-dark);
+      font-size: 1.05em;
+    }
+    .glossary-entry {
+      margin-bottom: var(--sp-lg);
+      padding-bottom: var(--sp-md);
+      border-bottom: 1px solid var(--border);
+    }
+    .glossary-entry:last-child { border-bottom: none; }
+    .glossary-category {
+      margin-top: var(--sp-xl);
+      margin-bottom: var(--sp-md);
+      padding: var(--sp-sm) var(--sp-md);
+      background: var(--accent);
+      color: white;
+      border-radius: var(--radius);
+      font-weight: 600;
+      font-size: 0.9em;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>📖 Glossary</h1>
+  <p>Quick-reference definitions for every concept in this course. Bookmark this page — you'll come back often.</p>
+
+  <!-- ============================================================ -->
+
+  <div class="glossary-category">JMS &amp; Messaging Core</div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">JMS (Java Message Service)</span>
+    <p>A Java API standard (JSR 343 / Jakarta Messaging 3.1) that defines how Java applications send, receive, and process messages. Think of it as JDBC but for messaging instead of databases.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">Message Broker</span>
+    <p>A server that receives messages from producers and routes them to consumers. ActiveMQ Artemis is a message broker. It sits between services so they don't need to know about each other.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">Queue (Point-to-Point)</span>
+    <p>A destination where each message is consumed by <em>exactly one</em> consumer. If three consumers listen on the same queue, each message goes to only one of them (load-balanced). Use for: task distribution, work queues.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">Topic (Publish/Subscribe)</span>
+    <p>A destination where each message is delivered to <em>all</em> active subscribers. If three consumers subscribe to a topic, all three receive every message. Use for: event broadcasting, notifications.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">Producer / Publisher</span>
+    <p>The component that creates and sends messages to a queue or topic.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">Consumer / Subscriber</span>
+    <p>The component that receives and processes messages from a queue or topic.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">ConnectionFactory</span>
+    <p>A JMS object that creates connections to the broker. In Spring Boot, this is auto-configured — you rarely touch it directly.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">Message</span>
+    <p>The unit of data sent through JMS. Has three parts: <strong>headers</strong> (metadata like destination, timestamp), <strong>properties</strong> (custom key-value pairs for filtering), and a <strong>body</strong> (the actual payload — text, bytes, map, object, or stream).</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">Destination</span>
+    <p>The named endpoint (queue or topic) where messages are sent and received. e.g., <code>order.queue</code> or <code>price.updates.topic</code>.</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <div class="glossary-category">Spring Boot JMS</div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">JmsTemplate</span>
+    <p>Spring's high-level helper for sending JMS messages. Handles connection management, error conversion, and message creation. The <code>send()</code>, <code>convertAndSend()</code>, and <code>sendAndReceive()</code> methods are your primary tools.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">@JmsListener</span>
+    <p>Annotation that marks a method as a JMS message consumer. Spring automatically wires up a listener container that polls the destination and calls your method for each message.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">JmsListenerContainerFactory</span>
+    <p>Factory that creates and configures the listener containers used by <code>@JmsListener</code>. You customize this when you need specific concurrency, acknowledgement modes, or topic subscription behavior.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">MessageConverter</span>
+    <p>Converts between Java objects and JMS messages. Spring's <code>MappingJackson2MessageConverter</code> serializes POJOs to JSON and back. Essential for sending structured data.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">spring-boot-starter-artemis</span>
+    <p>The Maven/Gradle dependency that auto-configures Spring Boot to work with ActiveMQ Artemis. Provides a <code>ConnectionFactory</code>, <code>JmsTemplate</code>, and <code>JmsListenerContainerFactory</code> out of the box.</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <div class="glossary-category">ActiveMQ Specifics</div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">ActiveMQ Artemis</span>
+    <p>The modern, high-performance successor to ActiveMQ 5.x (Classic). Built on Netty for non-blocking I/O. Native Spring Boot 3 support. Supports AMQP 1.0, MQTT, STOMP in addition to JMS.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">ActiveMQ Classic (5.x)</span>
+    <p>The original ActiveMQ broker. Still widely used in legacy enterprise systems. Development has slowed in favor of Artemis. No full embedded broker support in Spring Boot 3.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">Dead Letter Queue (DLQ)</span>
+    <p>A special queue where messages land after they fail processing too many times. Prevents poison messages from blocking a queue. Default in Artemis: <code>DLQ</code>. Configurable per address.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">Durable Subscriber</span>
+    <p>A topic subscriber that survives disconnection. The broker stores messages while the subscriber is offline and delivers them when it reconnects. Requires a unique <code>clientId</code> + <code>subscriptionName</code>.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">Address (Artemis)</span>
+    <p>Artemis's unified abstraction for destinations. An address can behave like a queue (anycast routing) or a topic (multicast routing), depending on configuration.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">Embedded Broker</span>
+    <p>An ActiveMQ instance running inside your Spring Boot application (same JVM). Perfect for development and testing. Enabled by adding <code>artemis-server</code> dependency and setting <code>spring.artemis.mode=embedded</code>.</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <div class="glossary-category">Spring Profiles</div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">Spring Profile</span>
+    <p>A named set of configuration that is activated at runtime. Beans and properties can be tied to a profile so they only load when that profile is active. Common profiles: <code>dev</code>, <code>test</code>, <code>staging</code>, <code>prod</code>.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">application-{profile}.yml</span>
+    <p>Profile-specific properties file. When a profile is active, Spring loads both <code>application.yml</code> (shared) and <code>application-{profile}.yml</code> (profile-specific). Profile-specific values override shared ones.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">@Profile</span>
+    <p>Annotation that makes a bean, configuration, or component available only when a specific profile is active. e.g., <code>@Profile("dev")</code> means the bean only loads in dev mode.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">Profile Group</span>
+    <p>A Spring Boot feature that lets you activate multiple related profiles under one name. Defined in <code>application.yml</code> under <code>spring.profiles.group</code>. e.g., activating "production" could automatically activate "prod" + "metrics" + "ssl".</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">spring.profiles.active</span>
+    <p>The property that controls which profile(s) are active. Can be set via CLI (<code>--spring.profiles.active=prod</code>), env var (<code>SPRING_PROFILES_ACTIVE=prod</code>), or in <code>application.properties</code>.</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <div class="glossary-category">Advanced Patterns</div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">Request-Reply</span>
+    <p>A synchronous communication pattern over JMS. The producer sends a message and waits for a response on a temporary queue. Spring's <code>JmsTemplate.sendAndReceive()</code> implements this.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">Message Selector</span>
+    <p>A SQL-like filter string that lets a consumer receive only messages matching certain header/property conditions. e.g., <code>"priority > 5 AND region = 'APAC'"</code>. Evaluated broker-side.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">CachingConnectionFactory</span>
+    <p>A Spring wrapper around <code>ConnectionFactory</code> that caches sessions, connections, and producers for better performance. Essential for production. Replace the raw factory with this.</p>
+  </div>
+
+  <div class="glossary-entry">
+    <span class="glossary-term">Acknowledgement Mode</span>
+    <p>Controls when a message is considered "consumed." <code>AUTO_ACKNOWLEDGE</code> (default): acknowledged when listener returns. <code>CLIENT_ACKNOWLEDGE</code>: your code must call <code>message.acknowledge()</code>. <code>SESSION_TRANSACTED</code>: acknowledged on transaction commit.</p>
+  </div>
+
+</body>
+</html>

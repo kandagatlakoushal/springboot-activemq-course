@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Spring Boot + ActiveMQ — Learning Path</title>
+  <link rel="stylesheet" href="assets/style.css">
+  <style>
+    .hero {
+      text-align: center;
+      padding: var(--sp-2xl) 0;
+      margin-bottom: var(--sp-xl);
+      border-bottom: 1px solid var(--border);
+    }
+    .hero h1 { font-size: 2.2rem; margin-bottom: var(--sp-md); }
+    .hero p { color: var(--text-muted); font-size: 1.1em; max-width: 32rem; margin: 0 auto; }
+
+    .nav-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: var(--sp-md);
+      margin: var(--sp-xl) 0;
+    }
+
+    .nav-card {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-md);
+      padding: var(--sp-md) var(--sp-lg);
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      text-decoration: none;
+      color: var(--text);
+      transition: all 0.2s;
+      border-bottom: none;
+    }
+    .nav-card:hover {
+      border-color: var(--accent-light);
+      box-shadow: var(--shadow-lg);
+      transform: translateY(-2px);
+    }
+
+    .nav-num {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 2.5rem;
+      height: 2.5rem;
+      border-radius: 50%;
+      background: var(--accent);
+      color: white;
+      font-weight: 700;
+      font-size: 0.9em;
+      flex-shrink: 0;
+    }
+    .nav-num.done { background: var(--success); }
+    .nav-num.locked { background: var(--border); color: var(--text-muted); }
+
+    .nav-info { flex: 1; }
+    .nav-title { font-weight: 600; font-size: 1em; }
+    .nav-desc { font-size: 0.85em; color: var(--text-muted); margin-top: 2px; }
+    .nav-meta { font-size: 0.75em; color: var(--text-muted); }
+
+    .ref-section { margin-top: var(--sp-2xl); }
+    .ref-links {
+      display: flex;
+      gap: var(--sp-md);
+      flex-wrap: wrap;
+    }
+    .ref-link {
+      padding: var(--sp-sm) var(--sp-lg);
+      background: var(--bg-highlight);
+      border-radius: var(--radius);
+      font-size: 0.9em;
+      font-weight: 500;
+    }
+
+    @media (max-width: 600px) {
+      .hero h1 { font-size: 1.6rem; }
+      .nav-card { padding: var(--sp-sm) var(--sp-md); }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="hero">
+    <h1>🚀 Spring Boot + ActiveMQ</h1>
+    <p>A 7-day, project-based learning path covering JMS messaging, Spring Profiles, and ActiveMQ Artemis — from fundamentals to enterprise patterns.</p>
+  </div>
+
+  <h2>📚 Lessons</h2>
+
+  <div class="nav-grid">
+
+    <a href="lessons/0001-your-seven-day-roadmap.html" class="nav-card">
+      <span class="nav-num done">01</span>
+      <div class="nav-info">
+        <div class="nav-title">Your 7-Day Learning Roadmap</div>
+        <div class="nav-desc">Infrastructure foundations, three projects overview, concepts map</div>
+        <div class="nav-meta">Day 1 · 15 min · Beginner</div>
+      </div>
+    </a>
+
+    <a href="lessons/0002-jms-mental-model-and-activemq-setup.html" class="nav-card">
+      <span class="nav-num done">02</span>
+      <div class="nav-info">
+        <div class="nav-title">JMS Mental Model &amp; ActiveMQ Setup</div>
+        <div class="nav-desc">6 core JMS objects, raw vs Spring Boot code, Docker setup, web console</div>
+        <div class="nav-meta">Day 1 · 30 min · Beginner</div>
+      </div>
+    </a>
+
+    <a href="#" class="nav-card" style="opacity:0.5; pointer-events:none;">
+      <span class="nav-num locked">03</span>
+      <div class="nav-info">
+        <div class="nav-title">Your First Queue: Send &amp; Receive</div>
+        <div class="nav-desc">Create a Spring Boot project, connect to Artemis, send &amp; receive messages</div>
+        <div class="nav-meta">Day 1 · Coming soon</div>
+      </div>
+    </a>
+
+    <a href="#" class="nav-card" style="opacity:0.5; pointer-events:none;">
+      <span class="nav-num locked">04</span>
+      <div class="nav-info">
+        <div class="nav-title">Spring Profiles: Environment Configuration</div>
+        <div class="nav-desc">application-{env}.yml, @Profile annotation, activation methods</div>
+        <div class="nav-meta">Day 2 · Coming soon</div>
+      </div>
+    </a>
+
+    <a href="#" class="nav-card" style="opacity:0.5; pointer-events:none;">
+      <span class="nav-num locked">05</span>
+      <div class="nav-info">
+        <div class="nav-title">JSON Messages &amp; MessageConverter</div>
+        <div class="nav-desc">Send POJOs as JSON, MappingJackson2MessageConverter, type IDs</div>
+        <div class="nav-meta">Day 2 · Coming soon</div>
+      </div>
+    </a>
+
+    <a href="#" class="nav-card" style="opacity:0.5; pointer-events:none;">
+      <span class="nav-num locked">06</span>
+      <div class="nav-info">
+        <div class="nav-title">Topics &amp; Pub/Sub Patterns</div>
+        <div class="nav-desc">Publish-subscribe, topic listeners, JmsListenerContainerFactory</div>
+        <div class="nav-meta">Day 3 · Coming soon</div>
+      </div>
+    </a>
+
+    <a href="#" class="nav-card" style="opacity:0.5; pointer-events:none;">
+      <span class="nav-num locked">07</span>
+      <div class="nav-info">
+        <div class="nav-title">Building the Order Processing System</div>
+        <div class="nav-desc">Multi-service architecture, event-driven order flow</div>
+        <div class="nav-meta">Day 3 · Coming soon</div>
+      </div>
+    </a>
+
+    <a href="#" class="nav-card" style="opacity:0.5; pointer-events:none;">
+      <span class="nav-num locked">08</span>
+      <div class="nav-info">
+        <div class="nav-title">Dead Letter Queues &amp; Error Handling</div>
+        <div class="nav-desc">Poison messages, DLQ configuration, retry strategies</div>
+        <div class="nav-meta">Day 4 · Coming soon</div>
+      </div>
+    </a>
+
+    <a href="#" class="nav-card" style="opacity:0.5; pointer-events:none;">
+      <span class="nav-num locked">09</span>
+      <div class="nav-info">
+        <div class="nav-title">Advanced Profiles: @Profile Beans &amp; Groups</div>
+        <div class="nav-desc">Swapping implementations, profile groups, negated profiles</div>
+        <div class="nav-meta">Day 4 · Coming soon</div>
+      </div>
+    </a>
+
+    <a href="#" class="nav-card" style="opacity:0.5; pointer-events:none;">
+      <span class="nav-num locked">10</span>
+      <div class="nav-info">
+        <div class="nav-title">Request-Reply &amp; Message Selectors</div>
+        <div class="nav-desc">Synchronous JMS, sendAndReceive, SQL-like selectors</div>
+        <div class="nav-meta">Day 5 · Coming soon</div>
+      </div>
+    </a>
+
+    <a href="#" class="nav-card" style="opacity:0.5; pointer-events:none;">
+      <span class="nav-num locked">11</span>
+      <div class="nav-info">
+        <div class="nav-title">Financial Data Pipeline Project</div>
+        <div class="nav-desc">Enterprise-grade pipeline mirroring S&amp;P Global MI patterns</div>
+        <div class="nav-meta">Day 6 · Coming soon</div>
+      </div>
+    </a>
+
+    <a href="#" class="nav-card" style="opacity:0.5; pointer-events:none;">
+      <span class="nav-num locked">12</span>
+      <div class="nav-info">
+        <div class="nav-title">Transactions &amp; Durable Subscribers</div>
+        <div class="nav-desc">JMS transactions, @Transactional, durable topic subscriptions</div>
+        <div class="nav-meta">Day 6 · Coming soon</div>
+      </div>
+    </a>
+
+    <a href="#" class="nav-card" style="opacity:0.5; pointer-events:none;">
+      <span class="nav-num locked">13</span>
+      <div class="nav-info">
+        <div class="nav-title">Integration Testing with Embedded Broker</div>
+        <div class="nav-desc">@EmbeddedActiveMQ, test containers, testing messaging flows</div>
+        <div class="nav-meta">Day 7 · Coming soon</div>
+      </div>
+    </a>
+
+    <a href="#" class="nav-card" style="opacity:0.5; pointer-events:none;">
+      <span class="nav-num locked">14</span>
+      <div class="nav-info">
+        <div class="nav-title">Interview Prep: Classic vs Artemis &amp; Architecture</div>
+        <div class="nav-desc">Head-to-head comparison, whiteboard architectures, interview Q&amp;A</div>
+        <div class="nav-meta">Day 7 · Coming soon</div>
+      </div>
+    </a>
+
+  </div>
+
+  <!-- Reference Section -->
+  <div class="ref-section">
+    <h2>📖 Reference</h2>
+    <div class="ref-links">
+      <a href="reference/glossary.html" class="ref-link">📖 Glossary</a>
+      <a href="reference/cheatsheet.html" class="ref-link">⚡ Cheat Sheet</a>
+    </div>
+  </div>
+
+  <div class="teacher-prompt" style="margin-top: var(--sp-2xl);">
+    <strong>Built with 💜 by your AI teacher</strong><br>
+    <small>Spring Boot + ActiveMQ · 7-Day Learning Path · S&amp;P Global MI Interview Prep</small>
+  </div>
+
+</body>
+</html>

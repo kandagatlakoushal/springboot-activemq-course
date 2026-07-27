@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 02 — JMS Mental Model &amp; ActiveMQ Setup</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <div class="lesson-header">
+    <span class="lesson-badge badge-beginner">Day 1</span>
+    <h1>JMS Mental Model &amp; ActiveMQ Setup</h1>
+    <p>Understand what JMS is, how Artemis implements it, and get a broker running locally</p>
+    <div class="lesson-meta">
+      <span>📅 Lesson 02 of 14</span>
+      <span>⏱ 30 min (read + setup)</span>
+      <span>🎯 Project: Notification Hub</span>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>What You'll Learn</h2>
+
+  <ul>
+    <li>What JMS actually is — a specification, not a product</li>
+    <li>The 6 core JMS objects and how they relate to each other</li>
+    <li>How Spring Boot hides 90% of the JMS boilerplate from you</li>
+    <li>How to run ActiveMQ Artemis in Docker</li>
+    <li>How to explore the broker's web console</li>
+  </ul>
+
+  <div class="callout callout-success">
+    <div class="callout-label">Primary Resource</div>
+    <p><a href="https://docs.spring.io/spring-boot/reference/messaging/jms.html">Spring Boot JMS Reference</a> — The official documentation for how Spring Boot auto-configures JMS. Read alongside this lesson.</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 1: The JMS Mental Model</h2>
+
+  <h3>JMS is a Spec, Not a Product</h3>
+
+  <p>This is the first thing interviewers test. <strong>JMS (Java Message Service)</strong> is a <em>specification</em> — a set of Java interfaces that define how messaging should work. It's like JDBC:</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Analogy</th>
+        <th>Specification</th>
+        <th>Implementation</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Databases</td>
+        <td>JDBC (the API)</td>
+        <td>MySQL Driver, PostgreSQL Driver, Oracle Driver</td>
+      </tr>
+      <tr>
+        <td>Messaging</td>
+        <td>JMS (the API)</td>
+        <td>ActiveMQ Artemis, ActiveMQ Classic, IBM MQ, RabbitMQ*</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p><small>*RabbitMQ supports JMS via a plugin, but natively uses AMQP.</small></p>
+
+  <p>You write your code against the <strong>JMS interfaces</strong>. The broker (Artemis) provides the <strong>implementation classes</strong>. If your company switches from Artemis to IBM MQ tomorrow, your code stays the same — only the driver (dependency + config) changes.</p>
+
+  <div class="callout callout-danger">
+    <div class="callout-label">Interview Insight</div>
+    <p>"JMS is a specification (JSR 343 / Jakarta Messaging 3.1), not a product. ActiveMQ Artemis is one implementation. The key benefit is vendor portability — my @JmsListener code works with any JMS-compliant broker."</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h3>The 6 Core JMS Objects</h3>
+
+  <p>JMS defines a hierarchy of objects. Understanding this hierarchy is essential because <strong>Spring Boot auto-configures most of them</strong> — but when something breaks, you need to know what's underneath.</p>
+
+  <p>Here's how the objects relate, and where they live physically:</p>
+
+  <div class="diagram">
+    <pre><code>
+  YOUR APPLICATION (JVM on your server)            THE BROKER (separate process)
+  ══════════════════════════════════════           ════════════════════════════════
+
+  ┌─────────────────────────────────┐             ┌──────────────────────────┐
+  │                                 │  TCP/61616  │                          │
+  │  1. ConnectionFactory           │─────────────│  ActiveMQ Artemis        │
+  │     (knows broker URL + creds)  │  persistent │  (stores messages on     │
+  │                                 │  TCP socket │   disk or in memory)     │
+  │       │                         │             │                          │
+  │       ▼ creates                 │             │  ┌──────────────────┐    │
+  │                                 │             │  │ order.queue      │    │
+  │  2. Connection                  │             │  │  → msg1          │    │
+  │     (the live TCP link)         │             │  │  → msg2          │    │
+  │                                 │             │  │  → msg3          │    │
+  │       │                         │             │  └──────────────────┘    │
+  │       ▼ creates                 │             │                          │
+  │                                 │             │  ┌──────────────────┐    │
+  │  3. Session                     │             │  │ price.topic      │    │
+  │     (single-threaded context;   │             │  │  → broadcast to  │    │
+  │      manages transactions       │             │  │    all subs      │    │
+  │      and acknowledgments)       │             │  └──────────────────┘    │
+  │                                 │             │                          │
+  │       ├───────────┐             │             └──────────────────────────┘
+  │       ▼           ▼             │
+  │                                 │
+  │  4. MessageProducer   5. MessageConsumer       6. Destination
+  │     (sends to a          (receives from a         (the named queue
+  │      destination)         destination)              or topic — just
+  │                                                     a string name)
+  └─────────────────────────────────┘
+    </code></pre>
+  </div>
+
+  <p>Let's walk through each:</p>
+
+  <div class="card">
+    <h3>1. ConnectionFactory</h3>
+    <p><strong>What it is:</strong> A factory object that knows <em>how</em> to connect to the broker — the URL (<code>tcp://localhost:61616</code>), username, password.</p>
+    <p><strong>Where it lives:</strong> In your application's memory. Spring Boot auto-creates it from your <code>application.yml</code> properties.</p>
+    <p><strong>Infrastructure view:</strong> Think of it as a "contact card" for the broker. It doesn't open a connection when created — it just holds the information needed to open one later.</p>
+    <p><strong>Thread-safe?</strong> Yes. One instance shared across your whole application.</p>
+  </div>
+
+  <div class="card">
+    <h3>2. Connection</h3>
+    <p><strong>What it is:</strong> An open TCP socket between your app and the broker.</p>
+    <p><strong>Where it lives:</strong> Your app holds one end, the broker holds the other. It's a real network connection — if you run <code>netstat</code> on your machine, you'll see it.</p>
+    <p><strong>Infrastructure view:</strong> This is the actual wire. When the connection opens, your app authenticates with the broker (user/password) and establishes a session protocol. If the network drops, this connection breaks.</p>
+    <p><strong>Thread-safe?</strong> Yes, but expensive to create. Production apps pool or cache them.</p>
+  </div>
+
+  <div class="card">
+    <h3>3. Session</h3>
+    <p><strong>What it is:</strong> A single-threaded context for producing/consuming messages. Also handles transactions and acknowledgments.</p>
+    <p><strong>Where it lives:</strong> Inside your application, associated with a Connection.</p>
+    <p><strong>Infrastructure view:</strong> One Connection can have multiple Sessions — like multiple conversations over a single phone line. Each Session is a logical channel multiplexed over the TCP connection.</p>
+    <p><strong>Thread-safe?</strong> <strong>No!</strong> Each thread must use its own Session. This is a common interview question.</p>
+  </div>
+
+  <div class="card">
+    <h3>4. MessageProducer</h3>
+    <p><strong>What it is:</strong> Sends messages to a Destination (queue or topic).</p>
+    <p><strong>Where it lives:</strong> Created by a Session, bound to a specific destination.</p>
+    <p><strong>Infrastructure view:</strong> When you call <code>producer.send(message)</code>, the message is serialized to bytes, sent over the TCP connection to the broker, and the broker writes it to the destination's internal storage.</p>
+  </div>
+
+  <div class="card">
+    <h3>5. MessageConsumer</h3>
+    <p><strong>What it is:</strong> Receives messages from a Destination.</p>
+    <p><strong>Where it lives:</strong> Created by a Session, attached to a specific destination.</p>
+    <p><strong>Infrastructure view:</strong> The consumer registers with the broker. The broker then <em>pushes</em> messages to the consumer over the TCP connection. This is why <code>@JmsListener</code> works without polling — the broker initiates the delivery.</p>
+  </div>
+
+  <div class="card">
+    <h3>6. Destination</h3>
+    <p><strong>What it is:</strong> A named endpoint — either a <strong>Queue</strong> or a <strong>Topic</strong>. Just a name string like <code>"order.queue"</code>.</p>
+    <p><strong>Where it lives:</strong> On the <em>broker</em>. The broker creates the destination when the first message is sent (auto-create) or through configuration. Messages are stored here until consumed.</p>
+    <p><strong>Infrastructure view:</strong> On the broker's filesystem, each destination has storage. In Artemis, this is a journal (append-only log files) stored at <code>/var/lib/artemis-instance/data/journal/</code> inside the Docker container.</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h3>The Raw JMS Code (What You'll Never Write)</h3>
+
+  <p>In raw JMS, sending a message takes ~15 lines of boilerplate. This is what Spring Boot saves you from:</p>
+
+  <pre data-lang="java"><code><span class="cmt">// RAW JMS — you'll never write this, but you need to know what's happening</span>
+
+<span class="cmt">// 1. Create a factory (knows broker address)</span>
+<span class="typ">ConnectionFactory</span> factory = <span class="kw">new</span> ActiveMQConnectionFactory(<span class="str">"tcp://localhost:61616"</span>);
+
+<span class="cmt">// 2. Open a TCP connection to the broker</span>
+<span class="typ">Connection</span> connection = factory.createConnection(<span class="str">"artemis"</span>, <span class="str">"artemis"</span>);
+connection.start();
+
+<span class="cmt">// 3. Create a session (single-threaded context)</span>
+<span class="typ">Session</span> session = connection.createSession(<span class="kw">false</span>, Session.AUTO_ACKNOWLEDGE);
+
+<span class="cmt">// 4. Specify where to send (destination = queue name on the broker)</span>
+<span class="typ">Destination</span> destination = session.createQueue(<span class="str">"order.queue"</span>);
+
+<span class="cmt">// 5. Create a producer attached to that destination</span>
+<span class="typ">MessageProducer</span> producer = session.createProducer(destination);
+
+<span class="cmt">// 6. Create and send the message</span>
+<span class="typ">TextMessage</span> message = session.createTextMessage(<span class="str">"Order #001 placed"</span>);
+producer.send(message);
+
+<span class="cmt">// 7. Clean up (close everything in reverse order)</span>
+producer.close();
+session.close();
+connection.close();</code></pre>
+
+  <h3>The Spring Boot Code (What You'll Actually Write)</h3>
+
+  <p>Spring Boot auto-configures the <code>ConnectionFactory</code>, manages Connections/Sessions behind the scenes, and gives you <code>JmsTemplate</code> — a one-liner wrapper:</p>
+
+  <pre data-lang="java"><code><span class="cmt">// SPRING BOOT — this is all you write</span>
+
+<span class="ann">@Service</span>
+<span class="kw">public class</span> <span class="typ">OrderPublisher</span> {
+
+    <span class="kw">private final</span> <span class="typ">JmsTemplate</span> jmsTemplate;
+
+    <span class="kw">public</span> OrderPublisher(<span class="typ">JmsTemplate</span> jmsTemplate) {
+        <span class="kw">this</span>.jmsTemplate = jmsTemplate;  <span class="cmt">// Spring injects this automatically</span>
+    }
+
+    <span class="kw">public void</span> placeOrder(<span class="typ">String</span> orderId) {
+        jmsTemplate.convertAndSend(<span class="str">"order.queue"</span>, <span class="str">"Order "</span> + orderId + <span class="str">" placed"</span>);
+        <span class="cmt">// That's it. ConnectionFactory → Connection → Session → Producer → send → cleanup</span>
+        <span class="cmt">// ALL handled by JmsTemplate internally.</span>
+    }
+}</code></pre>
+
+  <div class="callout callout-info">
+    <div class="callout-label">What Spring Boot Does For You</div>
+    <ul>
+      <li><strong>ConnectionFactory</strong> — Auto-created from <code>spring.artemis.*</code> properties in your YAML</li>
+      <li><strong>JmsTemplate</strong> — Auto-created bean. Wraps the raw JMS API. Handles Connection/Session lifecycle.</li>
+      <li><strong>@JmsListener</strong> — Creates a <code>MessageConsumer</code> in a background thread. Calls your method for each message.</li>
+      <li><strong>Error conversion</strong> — JMS checked exceptions → Spring's unchecked exceptions</li>
+    </ul>
+  </div>
+
+  <div class="callout callout-danger">
+    <div class="callout-label">Interview Insight</div>
+    <p>"Under the hood, JmsTemplate opens a Connection, creates a Session, creates a MessageProducer, sends the message, then closes everything. In production, we wrap the ConnectionFactory with a CachingConnectionFactory to pool these objects instead of creating them fresh each time."</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 2: Setting Up ActiveMQ Artemis</h2>
+
+  <p>Now let's get a real broker running on your machine. You'll interact with it throughout the rest of this course.</p>
+
+  <h3>What You're About to Start</h3>
+
+  <p>When you run the Docker command below, here's what happens at the infrastructure level:</p>
+
+  <div class="diagram">
+    <pre><code>
+  YOUR MACHINE (macOS / Linux / Windows)
+  ═══════════════════════════════════════════════════════════════
+
+  ┌──────────────────────────────────────────────────────────┐
+  │  Docker Engine                                           │
+  │                                                          │
+  │  ┌──────────────────────────────────────────────────┐    │
+  │  │  Container: "artemis"                            │    │
+  │  │                                                  │    │
+  │  │  ┌──────────────────────────────────────────┐    │    │
+  │  │  │  ActiveMQ Artemis (Java process)         │    │    │
+  │  │  │                                          │    │    │
+  │  │  │  Listening on:                           │    │    │
+  │  │  │    :61616  ← JMS / CORE protocol         │    │    │
+  │  │  │    :8161   ← Web Console (HTTP)          │    │    │
+  │  │  │    :5672   ← AMQP protocol               │    │    │
+  │  │  │                                          │    │    │
+  │  │  │  Data stored at:                         │    │    │
+  │  │  │    /var/lib/artemis-instance/data/        │    │    │
+  │  │  │      ├── journal/   (messages)           │    │    │
+  │  │  │      ├── bindings/  (queue definitions)  │    │    │
+  │  │  │      └── large-messages/ (big payloads)  │    │    │
+  │  │  └──────────────────────────────────────────┘    │    │
+  │  │                                                  │    │
+  │  │  Port mapping:                                   │    │
+  │  │    host:61616  →  container:61616                │    │
+  │  │    host:8161   →  container:8161                 │    │
+  │  └──────────────────────────────────────────────────┘    │
+  │                                                          │
+  └──────────────────────────────────────────────────────────┘
+
+  Your Spring Boot app (running outside Docker) connects to:
+    tcp://localhost:61616
+
+  You view the web console at:
+    http://localhost:8161
+    </code></pre>
+  </div>
+
+  <h3>Step 1: Start Artemis in Docker</h3>
+
+  <p>Open your terminal and run:</p>
+
+  <pre data-lang="bash"><code>docker run -d --name artemis \
+  -p 61616:61616 \
+  -p 8161:8161 \
+  -e ARTEMIS_USER=admin \
+  -e ARTEMIS_PASSWORD=admin \
+  apache/activemq-artemis:latest-alpine</code></pre>
+
+  <p>Let's break down each flag:</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Flag</th>
+        <th>What It Does</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>-d</code></td>
+        <td>Run in background (detached mode)</td>
+      </tr>
+      <tr>
+        <td><code>--name artemis</code></td>
+        <td>Name the container "artemis" so you can reference it later</td>
+      </tr>
+      <tr>
+        <td><code>-p 61616:61616</code></td>
+        <td>Map host port 61616 to container port 61616 (JMS protocol)</td>
+      </tr>
+      <tr>
+        <td><code>-p 8161:8161</code></td>
+        <td>Map host port 8161 to container port 8161 (web console)</td>
+      </tr>
+      <tr>
+        <td><code>-e ARTEMIS_USER=admin</code></td>
+        <td>Set the broker admin username</td>
+      </tr>
+      <tr>
+        <td><code>-e ARTEMIS_PASSWORD=admin</code></td>
+        <td>Set the broker admin password</td>
+      </tr>
+      <tr>
+        <td><code>apache/activemq-artemis:latest-alpine</code></td>
+        <td>Official Apache image (Alpine Linux for small size)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Step 2: Verify It's Running</h3>
+
+  <pre data-lang="bash"><code><span class="cmt"># Check container status</span>
+docker ps
+
+<span class="cmt"># Should show something like:</span>
+<span class="cmt"># CONTAINER ID   IMAGE                                    STATUS         PORTS</span>
+<span class="cmt"># a1b2c3d4e5f6   apache/activemq-artemis:latest-alpine   Up 30 seconds  0.0.0.0:61616->61616/tcp, 0.0.0.0:8161->8161/tcp</span>
+
+<span class="cmt"># Check broker logs (look for "Server is now live")</span>
+docker logs artemis</code></pre>
+
+  <div class="callout callout-warning">
+    <div class="callout-label">Troubleshooting</div>
+    <p>If port 61616 is already in use: <code>docker stop artemis && docker rm artemis</code>, then re-run the command.</p>
+    <p>If Docker isn't installed: <a href="https://docs.docker.com/desktop/install/mac-install/">Install Docker Desktop for Mac</a>.</p>
+  </div>
+
+  <h3>Step 3: Explore the Web Console</h3>
+
+  <p>Open your browser and go to: <a href="http://localhost:8161">http://localhost:8161</a></p>
+
+  <p>Login with <code>admin</code> / <code>admin</code>.</p>
+
+  <p>The web console is the broker's dashboard. Here's what you'll see and what it means:</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Console Page</th>
+        <th>What It Shows</th>
+        <th>Why It Matters</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Queues</strong></td>
+        <td>All queues, message count, consumer count</td>
+        <td>See if messages are piling up (consumers too slow or dead)</td>
+      </tr>
+      <tr>
+        <td><strong>Addresses</strong></td>
+        <td>Artemis's unified view of destinations (covers both queues &amp; topics)</td>
+        <td>Artemis uses "addresses" as the unified abstraction</td>
+      </tr>
+      <tr>
+        <td><strong>Connections</strong></td>
+        <td>Active TCP connections from clients (your Spring Boot apps)</td>
+        <td>See which services are connected right now</td>
+      </tr>
+      <tr>
+        <td><strong>Sessions</strong></td>
+        <td>JMS sessions open on each connection</td>
+        <td>Debug session leaks or concurrency issues</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout callout-info">
+    <div class="callout-label">Infrastructure Detail: Artemis Addresses</div>
+    <p>Artemis has a concept that JMS doesn't: <strong>Addresses</strong>. An address is a routing name. It can route in two modes:</p>
+    <ul>
+      <li><strong>Anycast</strong> → behaves like a JMS <strong>Queue</strong> (point-to-point, one consumer gets the message)</li>
+      <li><strong>Multicast</strong> → behaves like a JMS <strong>Topic</strong> (publish-subscribe, all subscribers get the message)</li>
+    </ul>
+    <p>When you use <code>JmsTemplate.convertAndSend("order.queue", ...)</code>, Artemis auto-creates an address named <code>order.queue</code> with anycast routing. You don't need to configure this manually.</p>
+  </div>
+
+  <h3>Step 4: Send a Test Message from the Console</h3>
+
+  <p>Let's prove the broker works before writing any Java code:</p>
+
+  <ol>
+    <li>In the web console, click <strong>Queues</strong> (or navigate to Artemis → Addresses)</li>
+    <li>Click <strong>"Create Queue"</strong> (or "Create Address")</li>
+    <li>Name: <code>test.queue</code>, Routing Type: <code>Anycast</code></li>
+    <li>Click on the new queue → <strong>"Send Message"</strong></li>
+    <li>Type a body: <code>Hello from the console!</code></li>
+    <li>Click Send</li>
+    <li>Now click <strong>"Browse Messages"</strong> — you should see your message waiting in the queue</li>
+  </ol>
+
+  <p>That message is now <strong>persisted on disk</strong> inside the Docker container. It will survive a broker restart. It will sit there until a consumer reads it.</p>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 3: Useful Docker Commands</h2>
+
+  <p>You'll use these throughout the course. Bookmark this section.</p>
+
+  <pre data-lang="bash"><code><span class="cmt"># Start the broker (if stopped)</span>
+docker start artemis
+
+<span class="cmt"># Stop the broker (messages persist)</span>
+docker stop artemis
+
+<span class="cmt"># View live logs</span>
+docker logs -f artemis
+
+<span class="cmt"># Open a shell inside the container</span>
+docker exec -it artemis /bin/bash
+
+<span class="cmt"># Use Artemis CLI to list queues</span>
+docker exec -it artemis /var/lib/artemis-instance/bin/artemis queue stat \
+  --user admin --password admin
+
+<span class="cmt"># Nuclear option: remove container + data (start fresh)</span>
+docker stop artemis && docker rm artemis</code></pre>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 4: The Full Infrastructure Picture</h2>
+
+  <p>By the end of this course, your local setup will look like this. Right now you've completed the <strong>Broker</strong> layer:</p>
+
+  <div class="diagram">
+    <pre><code>
+  ┌──────────────────────────────────────────────────────────────┐
+  │                    YOUR DEVELOPMENT MACHINE                  │
+  │                                                              │
+  │  ┌────────────────────┐         ┌────────────────────────┐  │
+  │  │  Spring Boot App   │  TCP    │  Docker: Artemis       │  │
+  │  │  (Notification Hub)│────────→│  Port 61616 (JMS)      │  │
+  │  │  Port 8080 (HTTP)  │         │  Port 8161 (Console)   │  │
+  │  │                    │         │                        │  │
+  │  │  - JmsTemplate     │         │  Queues:               │  │
+  │  │    (sends msgs)    │         │  ├── notification.queue │  │
+  │  │  - @JmsListener    │         │  ├── test.queue         │  │
+  │  │    (receives msgs) │         │  └── (auto-created)     │  │
+  │  └────────────────────┘         └────────────────────────┘  │
+  │                                                              │
+  │  application-dev.yml:                                        │
+  │    spring.artemis.broker-url=tcp://localhost:61616            │
+  │    spring.artemis.user=admin                                 │
+  │    spring.artemis.password=admin                             │
+  └──────────────────────────────────────────────────────────────┘
+
+  In production, the broker runs on a SEPARATE server (or cluster):
+
+  ┌──────────────┐          ┌──────────────┐          ┌──────────────┐
+  │  App Server  │   TCP    │  Broker      │   TCP    │  App Server  │
+  │  (Producer)  │─────────→│  Cluster     │←─────────│  (Consumer)  │
+  │  10.0.1.5    │          │  10.0.2.10   │          │  10.0.1.6    │
+  │              │          │  10.0.2.11   │          │              │
+  └──────────────┘          └──────────────┘          └──────────────┘
+    </code></pre>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Knowledge Check</h2>
+
+  <div class="quiz" data-quiz="q1">
+    <p class="quiz-question">JMS is best described as:</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="JMS defines interfaces. Artemis, IBM MQ, etc. provide the implementation classes.">A Java specification that defines messaging interfaces — brokers provide implementations</li>
+      <li>A specific messaging server developed by Apache for enterprise applications</li>
+      <li>A Spring Boot library that handles all messaging configuration automatically</li>
+      <li>A network protocol for sending messages between Java applications reliably</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <div class="quiz" data-quiz="q2">
+    <p class="quiz-question">Which JMS object is NOT thread-safe and must not be shared across threads?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="Sessions are single-threaded. Each thread needs its own Session. This is a frequent interview question.">Session</li>
+      <li>ConnectionFactory</li>
+      <li>Connection</li>
+      <li>Destination</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <div class="quiz" data-quiz="q3">
+    <p class="quiz-question">When your Spring Boot app calls <code>jmsTemplate.convertAndSend("order.queue", message)</code>, what happens at the network level?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="JmsTemplate manages the full lifecycle: Connection → Session → Producer → send → close, all over a TCP connection to port 61616.">The message is serialized and sent over a TCP connection to the broker on port 61616</li>
+      <li>The message is written directly to a shared database that the consumer polls</li>
+      <li>Spring Boot makes an HTTP POST request to the broker's REST API endpoint</li>
+      <li>The message is stored locally in a file and the consumer reads it later</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <div class="quiz" data-quiz="q4">
+    <p class="quiz-question">In ActiveMQ Artemis, what is the difference between an Address configured as "anycast" versus "multicast"?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="Anycast = Queue (one consumer gets each message). Multicast = Topic (all subscribers get every message). This is Artemis's unified model.">Anycast delivers to one consumer (like a Queue); multicast delivers to all subscribers (like a Topic)</li>
+      <li>Anycast uses TCP protocol for delivery; multicast uses UDP protocol for delivery</li>
+      <li>Anycast sends messages synchronously to consumers; multicast sends them asynchronously</li>
+      <li>Anycast stores messages persistently on disk; multicast keeps messages only in memory</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <div class="quiz" data-quiz="q5">
+    <p class="quiz-question">What port does the Artemis web management console run on?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="Port 8161 is the HTTP port for the web console. Port 61616 is for JMS messaging traffic.">8161</li>
+      <li>8080</li>
+      <li>61616</li>
+      <li>5672</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Your Checkpoint</h2>
+
+  <p>After this lesson, you should be able to:</p>
+  <ul>
+    <li>✅ Explain that JMS is a spec, not a product — and name at least 2 implementations</li>
+    <li>✅ Draw the 6 JMS objects and their hierarchy (ConnectionFactory → Connection → Session → Producer/Consumer + Destination)</li>
+    <li>✅ Explain what happens at the network level when a message is sent (TCP socket, port 61616, serialization)</li>
+    <li>✅ Have ActiveMQ Artemis running in Docker on your machine</li>
+    <li>✅ Navigate the web console and send a test message manually</li>
+    <li>✅ Explain the difference between raw JMS code and Spring Boot's JmsTemplate</li>
+  </ul>
+
+  <!-- ============================================================ -->
+
+  <h2>What's Next</h2>
+
+  <p>In <strong>Lesson 03</strong>, you'll create your first Spring Boot project, connect it to the Artemis broker you just started, and send + receive your first message in code. You'll also see the message appear in the web console in real-time.</p>
+
+  <!-- ============================================================ -->
+
+  <div class="teacher-prompt">
+    <strong>💬 Questions?</strong><br>
+    Anything unclear about JMS objects, the broker setup, or what's happening at the network level? Ask me — that's what I'm here for.
+    <br><br>
+    When you're ready, ask me to start <strong>Lesson 03: Your First Queue — Send &amp; Receive</strong>.
+  </div>
+
+  <div class="lesson-nav">
+    <a href="0001-your-seven-day-roadmap.html">← Lesson 01: Roadmap</a>
+    <a href="0003-your-first-queue-send-and-receive.html">Next: Lesson 03 — Your First Queue →</a>
+  </div>
+
+  <script src="../assets/quiz.js"></script>
+
+</body>
+</html>

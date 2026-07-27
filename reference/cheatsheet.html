@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cheat Sheet — Spring Boot JMS &amp; Profiles</title>
+  <link rel="stylesheet" href="../assets/style.css">
+  <style>
+    .cheat-section { margin-bottom: var(--sp-2xl); }
+    .cheat-section h3 { margin-top: var(--sp-lg); }
+  </style>
+</head>
+<body>
+
+  <h1>⚡ Quick Reference Cheat Sheet</h1>
+  <p>Pin-printable reference for Spring Boot JMS + Profiles syntax. All code is Spring Boot 3 + Artemis.</p>
+
+  <!-- ============================================================ -->
+
+  <div class="cheat-section">
+    <h2>1. Maven Dependencies</h2>
+    <pre data-lang="xml"><code>&lt;!-- ActiveMQ Artemis (Spring Boot 3) --&gt;
+&lt;dependency&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-artemis&lt;/artifactId&gt;
+&lt;/dependency&gt;
+
+&lt;!-- Embedded broker (dev/test only) --&gt;
+&lt;dependency&gt;
+    &lt;groupId&gt;org.apache.activemq&lt;/groupId&gt;
+    &lt;artifactId&gt;artemis-server&lt;/artifactId&gt;
+    &lt;scope&gt;test&lt;/scope&gt;
+&lt;/dependency&gt;</code></pre>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <div class="cheat-section">
+    <h2>2. Application Properties</h2>
+
+    <h3>application.yml (shared)</h3>
+    <pre data-lang="yaml"><code>spring:
+  artemis:
+    mode: embedded          # or 'native' for external broker
+    broker-url: tcp://localhost:61616
+    user: admin
+    password: admin
+  jms:
+    pub-sub-domain: false   # false=queues (default), true=topics</code></pre>
+
+    <h3>application-dev.yml</h3>
+    <pre data-lang="yaml"><code>spring:
+  artemis:
+    mode: embedded
+logging:
+  level:
+    org.apache.activemq: DEBUG</code></pre>
+
+    <h3>application-prod.yml</h3>
+    <pre data-lang="yaml"><code>spring:
+  artemis:
+    mode: native
+    broker-url: tcp://broker.prod.internal:61616
+    user: ${ARTEMIS_USER}
+    password: ${ARTEMIS_PASSWORD}
+  jms:
+    cache:
+      enabled: true
+      session-cache-size: 10</code></pre>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <div class="cheat-section">
+    <h2>3. Sending Messages</h2>
+
+    <h3>Simple text message</h3>
+    <pre data-lang="java"><code><span class="ann">@Service</span>
+<span class="kw">public class</span> <span class="typ">NotificationSender</span> {
+
+    <span class="kw">private final</span> <span class="typ">JmsTemplate</span> jmsTemplate;
+
+    <span class="kw">public</span> NotificationSender(<span class="typ">JmsTemplate</span> jmsTemplate) {
+        <span class="kw">this</span>.jmsTemplate = jmsTemplate;
+    }
+
+    <span class="kw">public void</span> send(<span class="typ">String</span> message) {
+        jmsTemplate.convertAndSend(<span class="str">"notification.queue"</span>, message);
+    }
+}</code></pre>
+
+    <h3>POJO as JSON</h3>
+    <pre data-lang="java"><code><span class="cmt">// Requires MessageConverter bean (see section 5)</span>
+jmsTemplate.convertAndSend(<span class="str">"order.queue"</span>, <span class="kw">new</span> Order(<span class="str">"ORD-001"</span>, <span class="num">299.99</span>));</code></pre>
+
+    <h3>With custom headers</h3>
+    <pre data-lang="java"><code>jmsTemplate.convertAndSend(<span class="str">"order.queue"</span>, order, msg -> {
+    msg.setStringProperty(<span class="str">"region"</span>, <span class="str">"APAC"</span>);
+    msg.setIntProperty(<span class="str">"priority"</span>, <span class="num">5</span>);
+    <span class="kw">return</span> msg;
+});</code></pre>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <div class="cheat-section">
+    <h2>4. Receiving Messages</h2>
+
+    <h3>Basic listener</h3>
+    <pre data-lang="java"><code><span class="ann">@Component</span>
+<span class="kw">public class</span> <span class="typ">NotificationListener</span> {
+
+    <span class="ann">@JmsListener</span>(destination = <span class="str">"notification.queue"</span>)
+    <span class="kw">public void</span> onMessage(<span class="typ">String</span> message) {
+        System.out.println(<span class="str">"Received: "</span> + message);
+    }
+}</code></pre>
+
+    <h3>POJO listener (auto-deserialized)</h3>
+    <pre data-lang="java"><code><span class="ann">@JmsListener</span>(destination = <span class="str">"order.queue"</span>)
+<span class="kw">public void</span> onOrder(<span class="typ">Order</span> order) {
+    System.out.println(<span class="str">"Processing: "</span> + order.getId());
+}</code></pre>
+
+    <h3>With message selector</h3>
+    <pre data-lang="java"><code><span class="ann">@JmsListener</span>(
+    destination = <span class="str">"order.queue"</span>,
+    selector = <span class="str">"region = 'APAC' AND priority > 3"</span>
+)
+<span class="kw">public void</span> onHighPriorityApac(<span class="typ">Order</span> order) { ... }</code></pre>
+
+    <h3>Topic listener</h3>
+    <pre data-lang="java"><code><span class="ann">@JmsListener</span>(
+    destination = <span class="str">"price.updates"</span>,
+    containerFactory = <span class="str">"topicFactory"</span>
+)
+<span class="kw">public void</span> onPriceUpdate(<span class="typ">PriceEvent</span> event) { ... }</code></pre>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <div class="cheat-section">
+    <h2>5. Configuration Beans</h2>
+
+    <h3>JSON MessageConverter</h3>
+    <pre data-lang="java"><code><span class="ann">@Bean</span>
+<span class="kw">public</span> <span class="typ">MessageConverter</span> jacksonJmsMessageConverter() {
+    <span class="typ">MappingJackson2MessageConverter</span> converter = <span class="kw">new</span> MappingJackson2MessageConverter();
+    converter.setTargetType(MessageType.TEXT);
+    converter.setTypeIdPropertyName(<span class="str">"_type"</span>);
+    <span class="kw">return</span> converter;
+}</code></pre>
+
+    <h3>Topic ListenerContainerFactory</h3>
+    <pre data-lang="java"><code><span class="ann">@Bean</span>
+<span class="kw">public</span> <span class="typ">JmsListenerContainerFactory&lt;?&gt;</span> topicFactory(
+        <span class="typ">ConnectionFactory</span> cf,
+        <span class="typ">DefaultJmsListenerContainerFactoryConfigurer</span> configurer) {
+    <span class="typ">DefaultJmsListenerContainerFactory</span> factory = <span class="kw">new</span> DefaultJmsListenerContainerFactory();
+    configurer.configure(factory, cf);
+    factory.setPubSubDomain(<span class="kw">true</span>);
+    <span class="kw">return</span> factory;
+}</code></pre>
+
+    <h3>CachingConnectionFactory (production)</h3>
+    <pre data-lang="java"><code><span class="ann">@Bean</span>
+<span class="ann">@Profile</span>(<span class="str">"prod"</span>)
+<span class="kw">public</span> <span class="typ">ConnectionFactory</span> cachingConnectionFactory(
+        <span class="typ">ConnectionFactory</span> artemisConnectionFactory) {
+    <span class="typ">CachingConnectionFactory</span> factory = <span class="kw">new</span> CachingConnectionFactory(artemisConnectionFactory);
+    factory.setSessionCacheSize(<span class="num">10</span>);
+    <span class="kw">return</span> factory;
+}</code></pre>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <div class="cheat-section">
+    <h2>6. Spring Profiles</h2>
+
+    <h3>Activate via CLI</h3>
+    <pre data-lang="bash"><code>java -jar app.jar --spring.profiles.active=prod</code></pre>
+
+    <h3>Activate via environment variable</h3>
+    <pre data-lang="bash"><code>export SPRING_PROFILES_ACTIVE=dev
+./mvnw spring-boot:run</code></pre>
+
+    <h3>Activate in Maven</h3>
+    <pre data-lang="bash"><code>./mvnw spring-boot:run -Dspring-boot.run.profiles=dev</code></pre>
+
+    <h3>Profile-specific bean</h3>
+    <pre data-lang="java"><code><span class="ann">@Service</span>
+<span class="ann">@Profile</span>(<span class="str">"dev"</span>)
+<span class="kw">public class</span> <span class="typ">MockPaymentService</span> <span class="kw">implements</span> <span class="typ">PaymentService</span> {
+    <span class="cmt">// Fake payment processing for development</span>
+}
+
+<span class="ann">@Service</span>
+<span class="ann">@Profile</span>(<span class="str">"prod"</span>)
+<span class="kw">public class</span> <span class="typ">StripePaymentService</span> <span class="kw">implements</span> <span class="typ">PaymentService</span> {
+    <span class="cmt">// Real Stripe integration for production</span>
+}</code></pre>
+
+    <h3>Profile groups</h3>
+    <pre data-lang="yaml"><code>spring:
+  profiles:
+    group:
+      production: "prod,metrics,ssl"
+      development: "dev,debug,embedded-broker"</code></pre>
+
+    <h3>Negated profile</h3>
+    <pre data-lang="java"><code><span class="ann">@Profile</span>(<span class="str">"!prod"</span>)  <span class="cmt">// Active in all profiles EXCEPT prod</span></code></pre>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <div class="cheat-section">
+    <h2>7. Docker Commands</h2>
+
+    <h3>Run Artemis</h3>
+    <pre data-lang="bash"><code># Run ActiveMQ Artemis in Docker
+docker run -d --name artemis \
+  -p 61616:61616 \
+  -p 8161:8161 \
+  -e ARTEMIS_USER=admin \
+  -e ARTEMIS_PASSWORD=admin \
+  apache/activemq-artemis:latest
+
+# Web console: http://localhost:8161
+# Broker URL:  tcp://localhost:61616</code></pre>
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 01 — Your 7-Day Learning Roadmap</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <div class="lesson-header">
+    <span class="lesson-badge badge-beginner">Start Here</span>
+    <h1>Your 7-Day Learning Roadmap</h1>
+    <p>Spring Boot + ActiveMQ + Spring Profiles</p>
+    <div class="lesson-meta">
+      <span>📅 Lesson 01 of 14</span>
+      <span>⏱ 15 min read</span>
+      <span>🎯 Mission: S&amp;P Global MI Interview Prep</span>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>The Big Picture</h2>
+
+  <p>You already know Spring Boot — REST controllers, services, JPA repositories. That's your foundation. Over the next 7 days, you'll add <strong>two powerful capabilities</strong> on top of it:</p>
+
+  <ol>
+    <li><strong>Spring Profiles</strong> — switching between dev/test/prod configurations without changing code</li>
+    <li><strong>ActiveMQ Messaging</strong> — decoupling services through asynchronous message queues and topics</li>
+  </ol>
+
+  <p>You'll learn these by building <strong>three progressively complex projects</strong>, each one teaching new concepts while reinforcing the ones before.</p>
+
+  <p>But first — let's make sure you understand <em>where</em> all of this lives and <em>how</em> it actually works at the infrastructure level.</p>
+
+  <!-- ============================================================ -->
+
+  <h2>Infrastructure Foundations</h2>
+
+  <p>Before we write a single line of Spring Boot code, you need a clear mental picture of <strong>what's physically happening</strong> when services communicate through a message broker. This is interview gold — many candidates can write <code>@JmsListener</code> but can't explain what's happening on the wire.</p>
+
+  <h3>What is a Service?</h3>
+
+  <p>A <strong>service</strong> is just a running Java process — your Spring Boot application packaged as a JAR, executing on a server. That server could be:</p>
+
+  <ul>
+    <li>Your laptop (during development)</li>
+    <li>A bare-metal server in a data center</li>
+    <li>A virtual machine (EC2 instance on AWS)</li>
+    <li>A Docker container running on Kubernetes</li>
+  </ul>
+
+  <p>Each service listens on a <strong>port</strong> (e.g., your REST API on port <code>8080</code>). Other systems talk to it by knowing its <strong>host + port</strong> — like <code>order-service.prod.internal:8080</code>.</p>
+
+  <h3>The Problem: Tight Coupling</h3>
+
+  <p>Imagine you have an <strong>Order Service</strong> that, after creating an order, needs to:</p>
+  <ol>
+    <li>Tell the <strong>Inventory Service</strong> to reserve stock</li>
+    <li>Tell the <strong>Email Service</strong> to send a confirmation</li>
+    <li>Tell the <strong>Analytics Service</strong> to log the event</li>
+  </ol>
+
+  <p>With REST calls, your Order Service looks like this:</p>
+
+  <div class="diagram">
+    <pre><code>
+  ┌──────────────┐     HTTP POST      ┌───────────────────┐
+  │              │───────────────────→ │ Inventory Service │
+  │              │     HTTP POST      │   :8081            │
+  │ Order        │───────────────────→ ├───────────────────┤
+  │ Service      │                    │ Email Service     │
+  │ :8080        │     HTTP POST      │   :8082            │
+  │              │───────────────────→ ├───────────────────┤
+  │              │                    │ Analytics Service │
+  └──────────────┘                    │   :8083            │
+                                      └───────────────────┘
+    </code></pre>
+  </div>
+
+  <p>This is <strong>tightly coupled</strong>. The Order Service must:</p>
+  <ul>
+    <li><strong>Know the address</strong> of every downstream service (host + port)</li>
+    <li><strong>Wait</strong> for each HTTP response before proceeding</li>
+    <li><strong>Handle failures</strong> — what if Email Service is down? Does the order fail?</li>
+    <li><strong>Change its code</strong> every time a new consumer is added</li>
+  </ul>
+
+  <div class="callout callout-danger">
+    <div class="callout-label">Interview Insight</div>
+    <p>If an interviewer asks "why not just use REST calls between services?" — this is your answer. REST creates a <strong>temporal coupling</strong> (caller waits for response) and a <strong>knowledge coupling</strong> (caller must know who to call). Both are fragile at scale.</p>
+  </div>
+
+  <h3>The Solution: A Message Broker</h3>
+
+  <p>A <strong>message broker</strong> is a dedicated server process — like a post office — that sits between your services. It's a separate running application (ActiveMQ Artemis, in our case) deployed on its own host and port.</p>
+
+  <div class="diagram">
+    <pre><code>
+  ┌──────────────┐                    ┌───────────────────┐
+  │              │    TCP :61616      │                   │
+  │ Order        │───────────────────→│   ActiveMQ        │
+  │ Service      │   "Here's an      │   Artemis         │
+  │ :8080        │    order event"    │   (The Broker)    │
+  │              │                    │                   │
+  └──────────────┘                    │  Stores messages  │
+                                      │  in queues/topics │
+  The Order Service is DONE.          │                   │
+  It doesn't wait. It doesn't        │                   │
+  know who will read the message.     └──────┬──┬──┬──────┘
+                                             │  │  │
+                              ┌──────────────┘  │  └──────────────┐
+                              │                 │                 │
+                              ▼                 ▼                 ▼
+                    ┌─────────────┐   ┌─────────────┐   ┌─────────────┐
+                    │ Inventory   │   │ Email       │   │ Analytics   │
+                    │ Service     │   │ Service     │   │ Service     │
+                    │ :8081       │   │ :8082       │   │ :8083       │
+                    └─────────────┘   └─────────────┘   └─────────────┘
+
+                    Each consumer connects to the broker independently.
+                    They pull messages at their own pace.
+    </code></pre>
+  </div>
+
+  <p>Now the Order Service is <strong>decoupled</strong>:</p>
+  <ul>
+    <li>It only knows the broker's address (<code>tcp://broker:61616</code>) — not the consumers</li>
+    <li>It sends the message and <strong>returns immediately</strong> — no waiting</li>
+    <li>If Email Service is down, the message <strong>waits in the broker</strong> until it comes back</li>
+    <li>Adding a new consumer (e.g., Fraud Detection) requires <strong>zero changes</strong> to Order Service</li>
+  </ul>
+
+  <h3>Where Does the Broker Run?</h3>
+
+  <p>The broker is just another process, deployed like any other service:</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Environment</th>
+        <th>How the Broker Runs</th>
+        <th>Broker URL</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Local Dev</strong></td>
+        <td>Docker container on your laptop, or embedded inside your Spring Boot app (same JVM)</td>
+        <td><code>tcp://localhost:61616</code></td>
+      </tr>
+      <tr>
+        <td><strong>Test/QA</strong></td>
+        <td>Dedicated VM or container in a test cluster</td>
+        <td><code>tcp://artemis.test.internal:61616</code></td>
+      </tr>
+      <tr>
+        <td><strong>Production</strong></td>
+        <td>Clustered brokers (multiple instances for high availability), often behind a load balancer or managed service (e.g., Amazon MQ)</td>
+        <td><code>tcp://artemis.prod.internal:61616</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout callout-info">
+    <div class="callout-label">Key Ports to Know</div>
+    <ul>
+      <li><strong>61616</strong> — The JMS/OpenWire protocol port. Your Spring Boot app connects here via TCP.</li>
+      <li><strong>8161</strong> — The broker's web management console (like a dashboard to see queues, messages, consumers).</li>
+      <li><strong>5672</strong> — AMQP protocol port (used by non-Java clients, RabbitMQ-style).</li>
+    </ul>
+  </div>
+
+  <h3>How Do Services Actually Talk to the Broker?</h3>
+
+  <p>Under the hood, the communication is simple:</p>
+
+  <ol>
+    <li><strong>TCP Connection</strong> — Your Spring Boot app opens a persistent TCP socket to the broker on port <code>61616</code>. This is what <code>ConnectionFactory</code> manages.</li>
+    <li><strong>Protocol</strong> — Over that TCP connection, they speak a messaging protocol (OpenWire for JMS, or AMQP/STOMP/MQTT). Spring Boot + Artemis uses <strong>CORE protocol</strong> by default.</li>
+    <li><strong>Send</strong> — The producer serializes a message (text, JSON bytes, etc.) and sends it to a named <strong>destination</strong> (e.g., <code>order.queue</code>). The broker stores it.</li>
+    <li><strong>Receive</strong> — The consumer has a listener thread that receives messages from the broker as they arrive (push model via <code>@JmsListener</code>), or pulls them on demand.</li>
+  </ol>
+
+  <div class="callout callout-success">
+    <div class="callout-label">Think of It Like This</div>
+    <p><strong>REST</strong> = phone call (synchronous, both parties must be available, caller waits for answer)<br>
+    <strong>Messaging</strong> = postal mail (asynchronous, sender drops it off, recipient picks it up whenever they're ready, post office stores it in between)</p>
+  </div>
+
+  <h3>What Happens When a Service Goes Down?</h3>
+
+  <p>This is where messaging shines vs. REST:</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Scenario</th>
+        <th>With REST</th>
+        <th>With Messaging</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Consumer is down</td>
+        <td>❌ HTTP 503 error. Producer must retry or fail.</td>
+        <td>✅ Messages queue up in the broker. Consumer processes them when it's back.</td>
+      </tr>
+      <tr>
+        <td>Consumer is slow</td>
+        <td>❌ Producer's thread blocks, timeouts, cascading failures.</td>
+        <td>✅ Messages buffer. Consumer works at its own pace.</td>
+      </tr>
+      <tr>
+        <td>New consumer added</td>
+        <td>❌ Producer must add a new HTTP call, redeploy.</td>
+        <td>✅ New consumer subscribes to existing topic. Zero producer changes.</td>
+      </tr>
+      <tr>
+        <td>Broker is down</td>
+        <td>N/A</td>
+        <td>❌ Nobody can send or receive. This is why production uses clustered brokers.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ============================================================ -->
+
+  <h2>The Three Projects</h2>
+
+  <div class="card">
+    <h3>🏗️ Project 1: Notification Hub <span class="lesson-badge badge-beginner">Days 1–2</span></h3>
+    <p>A single Spring Boot app that sends and receives notifications via ActiveMQ. Your "Hello World" of messaging — but with real structure.</p>
+    <p><strong>You'll learn:</strong></p>
+    <ul>
+      <li>Setting up ActiveMQ Artemis (Docker or embedded)</li>
+      <li>JMS fundamentals — <code>ConnectionFactory</code>, <code>JmsTemplate</code>, <code>@JmsListener</code></li>
+      <li>Queues (point-to-point): one producer, one consumer</li>
+      <li>Spring Profiles: <code>application-dev.yml</code> vs <code>application-prod.yml</code></li>
+      <li>Sending plain text and JSON messages</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>🛒 Project 2: Order Processing System <span class="lesson-badge badge-intermediate">Days 3–5</span></h3>
+    <p>A multi-module system where an Order Service publishes events and multiple downstream services consume them. This is the heart of enterprise messaging.</p>
+    <p><strong>You'll learn:</strong></p>
+    <ul>
+      <li>Topics (pub/sub): one producer, many consumers</li>
+      <li>Message converters — auto-serializing POJOs to JSON</li>
+      <li>Message selectors and filtering</li>
+      <li>Dead Letter Queues (DLQ) — handling poison messages</li>
+      <li>Spring Profiles with <code>@Profile</code> beans — swapping implementations per environment</li>
+      <li>Profile groups — activating related profiles together</li>
+      <li>Request-Reply pattern with <code>JmsTemplate.sendAndReceive()</code></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>🏦 Project 3: Financial Data Pipeline <span class="lesson-badge badge-advanced">Days 6–7</span></h3>
+    <p>An enterprise-grade pipeline that ingests market data, processes it through a chain of services, and publishes enriched results. Designed to mirror patterns you'd see at S&amp;P Global MI.</p>
+    <p><strong>You'll learn:</strong></p>
+    <ul>
+      <li>Durable subscribers — surviving broker restarts</li>
+      <li>Transactions — ensuring message + database consistency</li>
+      <li>Connection pooling with <code>CachingConnectionFactory</code></li>
+      <li>Message priority, TTL, and delivery modes</li>
+      <li>Integration testing messaging with <code>@EmbeddedActiveMQ</code></li>
+      <li>ActiveMQ Classic vs Artemis — interview-ready comparison</li>
+      <li>Production configuration with Spring Profiles</li>
+    </ul>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Day-by-Day Schedule</h2>
+
+  <p>Each day is designed for <strong>2–3 hours</strong> of focused work. The pattern: <em>read a lesson → build in your IDE → take a quiz → reflect</em>.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Day</th>
+        <th>Focus</th>
+        <th>Lessons</th>
+        <th>Key Win</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Day 1</strong></td>
+        <td>JMS Mental Model + Setup</td>
+        <td>02, 03</td>
+        <td>ActiveMQ running, first message sent &amp; received</td>
+      </tr>
+      <tr>
+        <td><strong>Day 2</strong></td>
+        <td>Spring Profiles + JSON Messages</td>
+        <td>04, 05</td>
+        <td>App switches config per profile; sends/receives POJOs as JSON</td>
+      </tr>
+      <tr>
+        <td><strong>Day 3</strong></td>
+        <td>Topics &amp; Pub/Sub + Order Service</td>
+        <td>06, 07</td>
+        <td>Multiple consumers receive the same order event</td>
+      </tr>
+      <tr>
+        <td><strong>Day 4</strong></td>
+        <td>Error Handling + Advanced Profiles</td>
+        <td>08, 09</td>
+        <td>Poison messages land in DLQ; profile groups activate test suites</td>
+      </tr>
+      <tr>
+        <td><strong>Day 5</strong></td>
+        <td>Request-Reply + Message Selectors</td>
+        <td>10</td>
+        <td>Synchronous request-reply over JMS; filtered consumption</td>
+      </tr>
+      <tr>
+        <td><strong>Day 6</strong></td>
+        <td>Financial Pipeline + Transactions</td>
+        <td>11, 12</td>
+        <td>Data pipeline with transactional message processing</td>
+      </tr>
+      <tr>
+        <td><strong>Day 7</strong></td>
+        <td>Testing + Interview Prep</td>
+        <td>13, 14</td>
+        <td>Integration tests pass; can whiteboard messaging architectures</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- ============================================================ -->
+
+  <h2>Concepts Map</h2>
+
+  <p>Here's how every concept connects. Concepts on the left are prerequisites for concepts on the right:</p>
+
+  <div class="diagram">
+    <pre><code>
+  ┌──────────────────────────────────────────────────────────────────┐
+  │                     YOUR EXISTING SKILLS                        │
+  │         Spring Boot · REST · JPA · Dependency Injection         │
+  └──────────┬──────────────────────────────────┬───────────────────┘
+             │                                  │
+             ▼                                  ▼
+  ┌─────────────────────┐           ┌──────────────────────────┐
+  │   SPRING PROFILES   │           │     JMS FUNDAMENTALS     │
+  │  ─────────────────  │           │  ──────────────────────  │
+  │  application-{env}  │           │  ConnectionFactory       │
+  │  @Profile beans     │           │  JmsTemplate             │
+  │  Profile groups     │           │  @JmsListener            │
+  │  Activation methods │           │  Queue vs Topic          │
+  └────────┬────────────┘           └──────────┬───────────────┘
+           │                                   │
+           │         ┌─────────────────────┐   │
+           └────────►│  NOTIFICATION HUB   │◄──┘
+                     │    (Project 1)      │
+                     └─────────┬───────────┘
+                               │
+                     ┌─────────▼───────────┐
+                     │   ORDER SYSTEM      │
+                     │    (Project 2)      │
+                     │  ─────────────────  │
+                     │  Pub/Sub Topics     │
+                     │  JSON Converters    │
+                     │  DLQ / Error Hdlg   │
+                     │  Message Selectors  │
+                     │  Request-Reply      │
+                     └─────────┬───────────┘
+                               │
+                     ┌─────────▼───────────┐
+                     │  FINANCIAL PIPELINE │
+                     │    (Project 3)      │
+                     │  ─────────────────  │
+                     │  Transactions       │
+                     │  Durable Subs       │
+                     │  Conn Pooling       │
+                     │  Integration Tests  │
+                     │  Interview Prep     │
+                     └─────────────────────┘
+    </code></pre>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>What You'll Need</h2>
+
+  <div class="callout callout-info">
+    <div class="callout-label">Prerequisites</div>
+    <ul>
+      <li><strong>Java 17+</strong> — Spring Boot 3 requires it</li>
+      <li><strong>Maven or Gradle</strong> — we'll use Maven in lessons</li>
+      <li><strong>Docker</strong> — to run ActiveMQ Artemis locally</li>
+      <li><strong>An IDE</strong> — IntelliJ IDEA recommended (Community Edition is fine)</li>
+      <li><strong>Your Spring Boot knowledge</strong> — REST controllers, services, JPA basics</li>
+    </ul>
+  </div>
+
+  <div class="callout callout-warning">
+    <div class="callout-label">ActiveMQ Classic vs Artemis</div>
+    <p>We'll use <strong>ActiveMQ Artemis</strong> throughout this course — it's the modern successor, has native Spring Boot 3 support, and is the future of ActiveMQ. On Day 7, we'll do a head-to-head comparison so you can discuss both in interviews.</p>
+    <p>Enterprise companies like S&amp;P Global may use either. Knowing Artemis + being able to explain the differences puts you ahead.</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>How Each Lesson Works</h2>
+
+  <p>Every lesson follows the same rhythm:</p>
+
+  <ol>
+    <li><strong>Knowledge</strong> — a focused explanation of one concept, backed by official docs</li>
+    <li><strong>Build</strong> — step-by-step code you write in your IDE (not copy-paste — type it)</li>
+    <li><strong>Quiz</strong> — retrieval practice to test your understanding</li>
+    <li><strong>Checkpoint</strong> — what you should be able to do/explain after the lesson</li>
+  </ol>
+
+  <div class="callout callout-success">
+    <div class="callout-label">Primary Resource for This Lesson</div>
+    <p><a href="https://docs.spring.io/spring-boot/reference/messaging/jms.html">Spring Boot JMS Reference</a> — bookmark this. You'll use it every day.</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Quick Knowledge Check</h2>
+
+  <div class="quiz" data-quiz="q1">
+    <p class="quiz-question">In enterprise messaging, what does "decoupling" mean?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="Decoupling means the producer doesn't need to know about the consumer — they communicate through a broker.">Services communicate through a broker without knowing about each other directly</li>
+      <li>Services share the same database to exchange information between each other</li>
+      <li>Services call each other's REST APIs but with retry logic added on top</li>
+      <li>Services are deployed on separate servers but call each other synchronously</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <div class="quiz" data-quiz="q2">
+    <p class="quiz-question">Which Spring Boot 3 starter provides ActiveMQ Artemis support?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="Spring Boot 3 has a dedicated Artemis starter with full auto-configuration.">spring-boot-starter-artemis</li>
+      <li>spring-boot-starter-activemq</li>
+      <li>spring-boot-starter-messaging</li>
+      <li>spring-boot-starter-jms-amq</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <div class="quiz" data-quiz="q3">
+    <p class="quiz-question">What is the purpose of Spring Profiles?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="Profiles let you define environment-specific beans and properties, activated at runtime.">Segregate configuration so different environments load different settings at runtime</li>
+      <li>Define user roles and permissions for your Spring Security configuration</li>
+      <li>Profile application performance and generate optimization reports automatically</li>
+      <li>Create different Maven build profiles for compilation and packaging steps</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Your Checkpoint</h2>
+
+  <p>After reading this lesson, you should be able to:</p>
+  <ul>
+    <li>✅ Explain why messaging decouples services (in interview terms)</li>
+    <li>✅ Name the three projects you'll build and what each teaches</li>
+    <li>✅ Know that Spring Boot 3 uses Artemis (not Classic) for native support</li>
+    <li>✅ Describe what Spring Profiles do at a high level</li>
+  </ul>
+
+  <!-- ============================================================ -->
+
+  <div class="teacher-prompt">
+    <strong>💬 Questions?</strong><br>
+    Come back to the chat and ask me anything that's unclear. I'm your teacher — no question is too basic.
+    <br><br>
+    When you're ready, ask me to start <strong>Lesson 02: JMS Mental Model &amp; ActiveMQ Setup</strong>.
+  </div>
+
+  <div class="lesson-nav">
+    <span></span>
+    <a href="0002-jms-mental-model-and-activemq-setup.html">Next: Lesson 02 — JMS Mental Model →</a>
+  </div>
+
+  <script src="../assets/quiz.js"></script>
+
+</body>
+</html>
