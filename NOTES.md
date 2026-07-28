@@ -40,8 +40,8 @@
 |---|-------|-----|--------|
 | 01 | Your 7-Day Roadmap + Infrastructure Foundations | 1 | ✅ Done |
 | 02 | JMS Mental Model & ActiveMQ Setup | 1 | ✅ Done |
-| 03 | Your First Queue: Send & Receive | 1 | 🔲 Planned |
-| 04 | Spring Profiles: Environment Configuration | 2 | 🔲 Planned |
+| 03 | Your First Queue: Send & Receive | 1 | ✅ Done |
+| 04 | Spring Profiles: Environment Configuration | 2 | 🔲 Next |
 | 05 | JSON Messages & MessageConverter | 2 | 🔲 Planned |
 | 06 | Topics & Pub/Sub Patterns | 3 | 🔲 Planned |
 | 07 | Building the Order Processing System | 3 | 🔲 Planned |
