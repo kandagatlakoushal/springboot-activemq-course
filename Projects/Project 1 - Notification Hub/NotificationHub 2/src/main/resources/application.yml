@@ -1,0 +1,19 @@
+spring.:
+    application:
+        name: NotificationHub
+
+
+spring:
+  artemis:
+    mode: native                          # connect to external broker (our Docker container)
+    broker-url: tcp://localhost:61616     # TCP connection to Artemis on port 61616
+    user: admin                           # credentials we set in docker run
+    password: admin
+
+server:
+  port: 8080
+
+app: 
+  queue: 
+    notification: notification.queue 
+
