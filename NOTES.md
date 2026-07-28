@@ -42,8 +42,8 @@
 | 02 | JMS Mental Model & ActiveMQ Setup | 1 | ✅ Done |
 | 03 | Your First Queue: Send & Receive | 1 | ✅ Done |
 | 04 | Spring Profiles: Environment Configuration | 2 | ✅ Done |
-| 05 | JSON Messages & MessageConverter | 2 | 🔲 Next |
-| 06 | Topics & Pub/Sub Patterns | 3 | 🔲 Planned |
+| 05 | JSON Messages & MessageConverter | 2 | ✅ Done |
+| 06 | Topics & Pub/Sub Patterns | 3 | 🔲 Next |
 | 07 | Building the Order Processing System | 3 | 🔲 Planned |
 | 08 | Dead Letter Queues & Error Handling | 4 | 🔲 Planned |
 | 09 | Advanced Profiles: @Profile Beans & Groups | 4 | 🔲 Planned |

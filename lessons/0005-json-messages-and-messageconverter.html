@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 05 — JSON Messages & MessageConverter</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <div class="lesson-header">
+    <span class="lesson-badge badge-beginner">Day 2</span>
+    <h1>JSON Messages &amp; MessageConverter</h1>
+    <p>Ditch raw strings and dangerous Java serialization — send structured POJOs as enterprise-grade JSON</p>
+    <div class="lesson-meta">
+      <span>📅 Lesson 05 of 14</span>
+      <span>⏱ 40 min (read + code)</span>
+      <span>🎯 Project: Notification Hub (upgrade)</span>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>What You'll Learn</h2>
+
+  <ul>
+    <li>Why raw <code>String</code> messages and Java native serialization (<code>ObjectMessage</code>) are banned in modern enterprise architectures</li>
+    <li>How <code>MappingJackson2MessageConverter</code> works under the hood (the serialization/deserialization pipeline)</li>
+    <li>What the <code>_type</code> property header is and why Artemis needs it to route data to Java POJOs</li>
+    <li>Step-by-step refactoring of your Notification Hub to send structured <code>NotificationMessage</code> objects</li>
+    <li>How interoperability works: allowing Python, Go, or Node.js services to consume your Spring Boot messages</li>
+  </ul>
+
+  <div class="callout callout-success">
+    <div class="callout-label">Primary Resource</div>
+    <p><a href="https://docs.spring.io/spring-framework/reference/integration/jms/annotated.html#jms-annotated-support">Spring Framework Reference: JMS Message Conversion</a> — Canonical docs on how Spring converts Java domain models to JMS payloads.</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 1: The Problem with Raw Strings &amp; Java Serialization</h2>
+
+  <h3>1. Why Not Just Send Raw Strings?</h3>
+  <p>In Lessons 03 and 04, your REST controller accepted a plain text string and sent it to <code>notification.queue</code>. But in real financial systems at S&amp;P Global MI, notifications have structured metadata: a recipient email, a priority level, a timestamp, an alert ID, and a delivery status.</p>
+
+  <p>If you try to concatenate these into a raw string (like <code>"ID:102|TO:koushal@spglobal.com|MSG:Rate Hike"</code>), you end up writing brittle custom parsing logic in every consumer. That breaks easily when fields change.</p>
+
+  <h3>2. Why Not Use Java Native Serialization (ObjectMessage)?</h3>
+  <p>If you pass an arbitrary Java object to <code>jmsTemplate.convertAndSend()</code> without configuring a converter, Spring's default <code>SimpleMessageConverter</code> tries to use Java native serialization to create a JMS <code>ObjectMessage</code>.</p>
+  
+  <p><strong>In enterprise systems, Java native serialization is strictly avoided for three reasons:</strong></p>
+
+  <div class="diagram">
+    <pre><code>
+  THE THREE FATAL FLAWS OF JAVA SERIALIZATION (ObjectMessage)
+  ═══════════════════════════════════════════════════════════════
+
+  1. 🔒 SECURITY VULNERABILITIES (CVE Deserialization Attacks)
+     If an attacker injects a malicious serialized byte stream into the broker,
+     the consumer JVM executes arbitrary code upon calling ObjectInputStream.readObject().
+     This is the #1 vulnerability class in enterprise messaging!
+
+  2. 🧱 LANGUAGE LOCK-IN (Zero Interoperability)
+     A Java byte stream is unreadable by anything except another JVM.
+     What if an analytics team wants to consume your alerts using Python or Go?
+     They can't parse an ObjectMessage without embedding a JVM!
+
+  3. 💥 FRAGILITY ACROSS VERSIONS
+     If the sender upgrades a POJO (adds a field or changes serialVersionUID)
+     before the consumer deploys the new class, deserialization throws
+     InvalidClassException and crashes the consumer loop!
+    </code></pre>
+  </div>
+
+  <div class="callout callout-danger">
+    <div class="callout-label">Interview Insight</div>
+    <p>"If an interviewer asks: 'How do you send domain objects over ActiveMQ Artemis?', never say 'implement Serializable and send an ObjectMessage.' The correct enterprise answer is: 'We configure a <code>MappingJackson2MessageConverter</code> bean to serialize POJOs into JSON text payloads (<code>TextMessage</code>) with type header metadata. This guarantees cross-language interoperability and prevents deserialization CVEs.'"</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 2: The JSON Conversion Pipeline Under the Hood</h2>
+
+  <p>When you configure Spring's <code>MappingJackson2MessageConverter</code>, the message flow transforms completely. Let's trace the physical infrastructure journey:</p>
+
+  <div class="diagram">
+    <pre><code>
+  THE JSON MESSAGE CONVERTER PIPELINE
+  ════════════════════════════════════
+
+  [ Sender Thread ]
+         │
+         ▼
+  1. jmsTemplate.convertAndSend("notification.queue", notificationObj);
+         │
+         ▼
+  2. MappingJackson2MessageConverter intercepts the POJO
+         │  ├─ Uses Jackson ObjectMapper to serialize POJO → JSON String
+         │  ├─ Creates a Jakarta JMS TextMessage containing the JSON payload
+         │  └─ Sets a custom JMS Header Property: 
+         │       _type = "com.learningPath.springProfileAmq.NotificationHub.Model.NotificationMessage"
+         ▼
+  3. TCP Socket (Port 61616) transmits TextMessage to Docker Artemis Broker
+         │
+         ▼
+  [ Artemis Broker Journal & Memory ]
+         │  Stores plain JSON TextMessage (inspectable in Web Console!)
+         ▼
+  4. Consumer Thread receives TextMessage via TCP
+         │
+         ▼
+  5. @JmsListener container invokes MappingJackson2MessageConverter
+         │  ├─ Reads the "_type" string property from JMS headers
+         │  ├─ Loads the target Java Class using ClassLoader
+         │  └─ Uses Jackson ObjectMapper to deserialize JSON String → Java POJO
+         ▼
+  6. public void receiveNotification(NotificationMessage msg) is executed!
+    </code></pre>
+  </div>
+
+  <h3>The Magic of the <code>_type</code> Property</h3>
+  <p>How does the receiving <code>@JmsListener</code> know which Java class to turn the JSON into? By default, when Jackson converts your object, Spring attaches a custom JMS String property to the message header called <strong><code>_type</code></strong>.</p>
+  
+  <p>When you look in the ActiveMQ Artemis web console (port 8161), you will literally see:</p>
+  <ul>
+    <li><strong>Payload:</strong> <code>{"id":"NOTE-1","recipient":"user@domain.com","content":"Welcome!","status":"SENT"}</code></li>
+    <li><strong>Properties:</strong> <code>_type = com.learningPath.springProfileAmq.NotificationHub.Model.NotificationMessage</code></li>
+  </ul>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 3: Refactoring Your Notification Hub</h2>
+
+  <p>Let's upgrade your Notification Hub project right now. We will add a model package, configure the message converter bean, and update the sender and listener.</p>
+
+  <h3>Step 1: Create the POJO Model</h3>
+  <p>Create a new folder <code>Model</code> inside your package and create <code>NotificationMessage.java</code>:</p>
+
+  <pre data-lang="java"><code><span class="cmt">// src/main/java/com/learningPath/springProfileAmq/NotificationHub/Model/NotificationMessage.java</span>
+<span class="kw">package</span> com.learningPath.springProfileAmq.NotificationHub.Model;
+
+<span class="kw">import</span> java.time.LocalDateTime;
+
+<span class="kw">public class</span> <span class="typ">NotificationMessage</span> {
+
+    <span class="kw">private</span> <span class="typ">String</span> id;
+    <span class="kw">private</span> <span class="typ">String</span> recipient;
+    <span class="kw">private</span> <span class="typ">String</span> content;
+    <span class="kw">private</span> <span class="typ">String</span> status;
+    <span class="kw">private</span> <span class="typ">String</span> timestamp;
+
+    <span class="cmt">// ⚠️ CRITICAL: Jackson requires a default no-argument constructor for deserialization!</span>
+    <span class="kw">public</span> <span class="typ">NotificationMessage</span>() {
+    }
+
+    <span class="kw">public</span> <span class="typ">NotificationMessage</span>(<span class="typ">String</span> id, <span class="typ">String</span> recipient, <span class="typ">String</span> content, <span class="typ">String</span> status) {
+        <span class="kw">this</span>.id = id;
+        <span class="kw">this</span>.recipient = recipient;
+        <span class="kw">this</span>.content = content;
+        <span class="kw">this</span>.status = status;
+        <span class="kw">this</span>.timestamp = LocalDateTime.now().toString();
+    }
+
+    <span class="cmt">// --- Getters and Setters (Required by Jackson) ---</span>
+    <span class="kw">public</span> <span class="typ">String</span> getId() { <span class="kw">return</span> id; }
+    <span class="kw">public void</span> setId(<span class="typ">String</span> id) { <span class="kw">this</span>.id = id; }
+
+    <span class="kw">public</span> <span class="typ">String</span> getRecipient() { <span class="kw">return</span> recipient; }
+    <span class="kw">public void</span> setRecipient(<span class="typ">String</span> recipient) { <span class="kw">this</span>.recipient = recipient; }
+
+    <span class="kw">public</span> <span class="typ">String</span> getContent() { <span class="kw">return</span> content; }
+    <span class="kw">public void</span> setContent(<span class="typ">String</span> content) { <span class="kw">this</span>.content = content; }
+
+    <span class="kw">public</span> <span class="typ">String</span> getStatus() { <span class="kw">return</span> status; }
+    <span class="kw">public void</span> setStatus(<span class="typ">String</span> status) { <span class="kw">this</span>.status = status; }
+
+    <span class="kw">public</span> <span class="typ">String</span> getTimestamp() { <span class="kw">return</span> timestamp; }
+    <span class="kw">public void</span> setTimestamp(<span class="typ">String</span> timestamp) { <span class="kw">this</span>.timestamp = timestamp; }
+
+    <span class="ann">@Override</span>
+    <span class="kw">public</span> <span class="typ">String</span> toString() {
+        <span class="kw">return</span> <span class="str">"NotificationMessage{id='"</span> + id + <span class="str">"', recipient='"</span> + recipient + 
+               <span class="str">"', content='"</span> + content + <span class="str">"', status='"</span> + status + <span class="str">"'}"</span>;
+    }
+}</code></pre>
+
+  <div class="callout callout-warning">
+    <div class="callout-label">Common Trap: Missing Default Constructor</div>
+    <p>If you forget the empty <code>public NotificationMessage() {}</code> constructor, Jackson will throw an <code>InvalidDefinitionException</code> when the consumer tries to deserialize the JSON back into an object! Always include a no-arg constructor in message POJOs.</p>
+  </div>
+
+  <h3>Step 2: Create the JMS Configuration Class</h3>
+  <p>Create a <code>Config</code> package and add <code>JmsConfig.java</code>. This tells Spring Boot to override the default simple converter with our JSON Jackson converter:</p>
+
+  <pre data-lang="java"><code><span class="cmt">// src/main/java/com/learningPath/springProfileAmq/NotificationHub/Config/JmsConfig.java</span>
+<span class="kw">package</span> com.learningPath.springProfileAmq.NotificationHub.Config;
+
+<span class="kw">import</span> org.springframework.context.annotation.Bean;
+<span class="kw">import</span> org.springframework.context.annotation.Configuration;
+<span class="kw">import</span> org.springframework.jms.support.converter.MappingJackson2MessageConverter;
+<span class="kw">import</span> org.springframework.jms.support.converter.MessageConverter;
+<span class="kw">import</span> org.springframework.jms.support.converter.MessageType;
+
+<span class="ann">@Configuration</span>
+<span class="kw">public class</span> <span class="typ">JmsConfig</span> {
+
+    <span class="ann">@Bean</span>
+    <span class="kw">public</span> <span class="typ">MessageConverter</span> jacksonJmsMessageConverter() {
+        <span class="typ">MappingJackson2MessageConverter</span> converter = <span class="kw">new</span> <span class="typ">MappingJackson2MessageConverter</span>();
+        
+        <span class="cmt">// 1. Tell converter to wrap JSON in a jakarta.jms.TextMessage (not BytesMessage)</span>
+        converter.setTargetType(MessageType.TEXT);
+        
+        <span class="cmt">// 2. Set the custom JMS header property name that will store the Java class name</span>
+        converter.setTypeIdPropertyName(<span class="str">"_type"</span>);
+        
+        <span class="kw">return</span> converter;
+    }
+}</code></pre>
+
+  <div class="callout callout-info">
+    <div class="callout-label">How Auto-Configuration Interacts With This Bean</div>
+    <p>When Spring Boot's starter sees a bean of type <code>MessageConverter</code> in your application context, it automatically injects it into the auto-configured <code>JmsTemplate</code> AND the <code>JmsListenerContainerFactory</code>. You don't need to manually wire them together!</p>
+  </div>
+
+  <h3>Step 3: Update NotificationSender</h3>
+  <p>Now modify your sender to accept a <code>NotificationMessage</code> object instead of a raw String:</p>
+
+  <pre data-lang="java"><code><span class="cmt">// src/main/java/com/learningPath/springProfileAmq/NotificationHub/Service/NotificationSender.java</span>
+<span class="kw">package</span> com.learningPath.springProfileAmq.NotificationHub.Service;
+
+<span class="kw">import</span> org.slf4j.Logger;
+<span class="kw">import</span> org.slf4j.LoggerFactory;
+<span class="kw">import</span> org.springframework.beans.factory.annotation.Value;
+<span class="kw">import</span> org.springframework.jms.core.JmsTemplate;
+<span class="kw">import</span> org.springframework.stereotype.Service;
+<span class="kw">import</span> com.learningPath.springProfileAmq.NotificationHub.Model.NotificationMessage;
+
+<span class="ann">@Service</span>
+<span class="kw">public class</span> <span class="typ">NotificationSender</span> {
+
+    <span class="kw">private final</span> <span class="typ">Logger</span> log = LoggerFactory.getLogger(<span class="kw">this</span>.getClass());
+    <span class="kw">private final</span> <span class="typ">JmsTemplate</span> jmsTemplate;
+
+    <span class="ann">@Value</span>(<span class="str">"${app.queue.notification}"</span>)
+    <span class="kw">private</span> <span class="typ">String</span> queueName;
+
+    <span class="kw">public</span> <span class="typ">NotificationSender</span>(<span class="typ">JmsTemplate</span> jmsTemplate) {
+        <span class="kw">this</span>.jmsTemplate = jmsTemplate;
+    }
+
+    <span class="kw">public void</span> send(<span class="typ">NotificationMessage</span> message) {
+        log.info(<span class="str">"📤 Sending JSON Object to [{}]: {}"</span>, queueName, message);
+        
+        <span class="cmt">// Spring automagically invokes our MappingJackson2MessageConverter here!</span>
+        jmsTemplate.convertAndSend(queueName, message);
+        
+        log.info(<span class="str">"✅ JSON Message dispatched to broker successfully"</span>);
+    }
+}</code></pre>
+
+  <h3>Step 4: Update NotificationListener</h3>
+  <p>Update your listener to receive the structured object directly:</p>
+
+  <pre data-lang="java"><code><span class="cmt">// src/main/java/com/learningPath/springProfileAmq/NotificationHub/Service/NotificationListner.java</span>
+<span class="kw">package</span> com.learningPath.springProfileAmq.NotificationHub.Service;
+
+<span class="kw">import</span> org.slf4j.Logger;
+<span class="kw">import</span> org.slf4j.LoggerFactory;
+<span class="kw">import</span> org.springframework.jms.annotation.JmsListener;
+<span class="kw">import</span> org.springframework.stereotype.Service;
+<span class="kw">import</span> com.learningPath.springProfileAmq.NotificationHub.Model.NotificationMessage;
+
+<span class="ann">@Service</span>
+<span class="kw">public class</span> <span class="typ">NotificationListner</span> {
+
+    <span class="kw">private final</span> <span class="typ">Logger</span> log = LoggerFactory.getLogger(<span class="kw">this</span>.getClass());
+
+    <span class="ann">@JmsListener</span>(destination = <span class="str">"${app.queue.notification}"</span>)
+    <span class="kw">public void</span> receiveNotification(<span class="typ">NotificationMessage</span> message) {
+        <span class="cmt">// The message parameter is already deserialized from JSON back into a Java POJO!</span>
+        log.info(<span class="str">"📥 Received Deserialized POJO:"</span>);
+        log.info(<span class="str">"   ├─ ID:        {}"</span>, message.getId());
+        log.info(<span class="str">"   ├─ To:        {}"</span>, message.getRecipient());
+        log.info(<span class="str">"   ├─ Content:   {}"</span>, message.getContent());
+        log.info(<span class="str">"   └─ Timestamp: {}"</span>, message.getTimestamp());
+    }
+}</code></pre>
+
+  <h3>Step 5: Update NotificationController</h3>
+  <p>Finally, update your REST endpoint to accept JSON from HTTP requests and construct our POJO:</p>
+
+  <pre data-lang="java"><code><span class="cmt">// src/main/java/com/learningPath/springProfileAmq/NotificationHub/Controller/NotificationController.java</span>
+<span class="kw">package</span> com.learningPath.springProfileAmq.NotificationHub.Controller;
+
+<span class="kw">import</span> java.util.UUID;
+<span class="kw">import</span> org.slf4j.Logger;
+<span class="kw">import</span> org.slf4j.LoggerFactory;
+<span class="kw">import</span> org.springframework.http.ResponseEntity;
+<span class="kw">import</span> org.springframework.web.bind.annotation.*;
+<span class="kw">import</span> com.learningPath.springProfileAmq.NotificationHub.Model.NotificationMessage;
+<span class="kw">import</span> com.learningPath.springProfileAmq.NotificationHub.Service.NotificationSender;
+
+<span class="ann">@RestController</span>
+<span class="ann">@RequestMapping</span>(<span class="str">"/app"</span>)
+<span class="kw">public class</span> <span class="typ">NotificationController</span> {
+
+    <span class="kw">private final</span> <span class="typ">Logger</span> log = LoggerFactory.getLogger(<span class="kw">this</span>.getClass());
+    <span class="kw">private final</span> <span class="typ">NotificationSender</span> sender;
+
+    <span class="kw">public</span> <span class="typ">NotificationController</span>(<span class="typ">NotificationSender</span> sender) {
+        <span class="kw">this</span>.sender = sender;
+    }
+
+    <span class="ann">@PostMapping</span>(<span class="str">"/notify"</span>)
+    <span class="kw">public</span> <span class="typ">ResponseEntity</span>&lt;<span class="typ">NotificationMessage</span>&gt; notify(<span class="ann">@RequestParam</span> <span class="typ">String</span> recipient, 
+                                                        <span class="ann">@RequestParam</span> <span class="typ">String</span> content) {
+        
+        <span class="cmt">// Create a structured domain object</span>
+        <span class="typ">String</span> alertId = <span class="str">"ALT-"</span> + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        <span class="typ">NotificationMessage</span> msg = <span class="kw">new</span> <span class="typ">NotificationMessage</span>(alertId, recipient, content, <span class="str">"DISPATCHED"</span>);
+        
+        sender.send(msg);
+        <span class="kw">return</span> ResponseEntity.ok(msg);
+    }
+}</code></pre>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 4: Run &amp; Verify Your Upgraded Hub</h2>
+
+  <h3>Step 1: Start the Application</h3>
+  <pre data-lang="bash"><code>./mvnw spring-boot:run -Dspring-boot.run.profiles=dev</code></pre>
+
+  <h3>Step 2: Trigger a Notification via cURL</h3>
+  <p>Open a terminal and send a POST request with parameters:</p>
+  <pre data-lang="bash"><code>curl -X POST "http://localhost:8081/app/notify?recipient=koushal@spglobal.com&content=System+Upgrade+at+Midnight"</code></pre>
+
+  <h3>Step 3: Inspect the Terminal Output</h3>
+  <p>Notice how seamless the translation is from HTTP -> POJO -> JSON -> Broker -> JSON -> POJO -> Listener:</p>
+  <pre data-lang="bash"><code>📤 Sending JSON Object to [notification.queue]: NotificationMessage{id='ALT-A1B2C3D4', recipient='koushal@spglobal.com', content='System Upgrade at Midnight', status='DISPATCHED'}
+✅ JSON Message dispatched to broker successfully
+📥 Received Deserialized POJO:
+   ├─ ID:        ALT-A1B2C3D4
+   ├─ To:        koushal@spglobal.com
+   ├─ Content:   System Upgrade at Midnight
+   └─ Timestamp: 2026-07-28T20:50:12.123456</code></pre>
+
+  <!-- ============================================================ -->
+
+  <h2>Step 6: Hands-On Experiments (Desirable Difficulty)</h2>
+
+  <div class="card">
+    <h3>🧪 Experiment A: See the Wire Format in the Web Console</h3>
+    <ol>
+      <li>In your terminal, comment out the `@JmsListener` annotation in <code>NotificationListner.java</code> so the consumer stops draining messages.</li>
+      <li>Restart the app and send 2 notifications using cURL.</li>
+      <li>Open your browser to <strong>http://localhost:8161</strong> (admin/admin).</li>
+      <li>Navigate to <code>notification.queue</code> and click **Browse Messages**.</li>
+      <li>Click on one of the messages. Look at the **Body** (it is clean JSON text!) and look at the **Properties** table (verify the <code>_type</code> string property).</li>
+      <li>Uncomment `@JmsListener` and restart to watch them get consumed!</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h3>🧪 Experiment B: Simulate a Schema Mismatch (Version Drift)</h3>
+    <ol>
+      <li>In <code>NotificationMessage.java</code>, rename the field <code>content</code> to <code>bodyText</code> (change the getter/setter too).</li>
+      <li>Restart the app and trigger a cURL request.</li>
+      <li>What happens? Jackson will serialize it as <code>{"bodyText":"..."}</code>. Notice how clean Jackson handles unknown or changed properties compared to native Java serialization!</li>
+      <li>Revert the field name back to <code>content</code> when done.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h3>🧪 Experiment C: The Missing No-Arg Constructor Trap</h3>
+    <ol>
+      <li>In <code>NotificationMessage.java</code>, comment out the default constructor: <code>// public NotificationMessage() {}</code>.</li>
+      <li>Restart the app and trigger a notification.</li>
+      <li>Watch the consumer thread explode with a <code>InvalidDefinitionException: Cannot construct instance... no Creators, like default constructor, exist</code>.</li>
+      <li>This is why understanding the serialization boundary is crucial! Uncomment the constructor to fix it.</li>
+    </ol>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Knowledge Check</h2>
+
+  <div class="quiz" data-quiz="q1">
+    <p class="quiz-question">Why is Java native serialization (<code>ObjectMessage</code>) considered an anti-pattern in modern enterprise messaging architectures?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="Java native serialization suffers from severe deserialization security vulnerabilities (CVEs), lacks cross-language interoperability, and is brittle when class definitions evolve.">It introduces deserialization CVE security vulnerabilities, prevents non-Java services (like Python or Node.js) from consuming messages, and breaks easily when classes change</li>
+      <li>It consumes too much disk space on the broker because it converts every object into a 10MB bitmap image before storing it</li>
+      <li>ActiveMQ Artemis natively blocks all ObjectMessage payloads by default unless you purchase an enterprise commercial license</li>
+      <li>ObjectMessage is only supported in OpenWire protocols and is incompatible with TCP socket connections</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <div class="quiz" data-quiz="q2">
+    <p class="quiz-question">How does <code>MappingJackson2MessageConverter</code> let the receiving Spring Boot app know which class to deserialize the incoming JSON payload into?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="When serializing, the converter injects a custom JMS String property named '_type' into the message headers containing the fully qualified class name.">It sets a custom JMS String property named <code>_type</code> in the message headers containing the fully qualified Java class name</li>
+      <li>It encodes the Java class name directly into the first 50 bytes of the JSON payload string itself</li>
+      <li>It makes an HTTP callback request to the sender application at runtime to ask what class type was sent</li>
+      <li>It requires you to create a separate queue for every individual Java class in your application</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <div class="quiz" data-quiz="q3">
+    <p class="quiz-question">What happens if your domain model class (POJO) lacks a default no-argument constructor?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="Jackson relies on reflection using the default no-argument constructor to instantiate the object before populating fields from JSON. Without it, deserialization fails.">The consumer fails at runtime during deserialization with an exception because Jackson cannot instantiate the object via reflection</li>
+      <li>Spring Boot automatically generates a default constructor at bytecode compilation time using CGLIB</li>
+      <li>The message is silently discarded by the broker and moved to the system error log without notifying the consumer</li>
+      <li>The converter falls back to plain string conversion and passes a raw JSON string into your listener method</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <div class="quiz" data-quiz="q4">
+    <p class="quiz-question">Why did we set <code>converter.setTargetType(MessageType.TEXT)</code> in our <code>JmsConfig</code> bean?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="Setting target type to TEXT ensures the payload is transmitted and stored as human-readable JSON inside a JMS TextMessage rather than unreadable binary byte arrays.">So that the serialized JSON payload is stored and transmitted as a human-readable JMS <code>TextMessage</code>, making debugging in the web console easy</li>
+      <li>Because ActiveMQ Artemis does not support transmitting binary bytes or map payloads over TCP connections</li>
+      <li>To force the broker to compress the message using GZIP text encoding before saving it to disk</li>
+      <li>Because Spring Boot 3 Jakarta namespace removes support for all other JMS message types</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Your Checkpoint</h2>
+
+  <ul>
+    <li>✅ Explain why enterprise systems ban Java native serialization (CVEs, language lock-in, fragility)</li>
+    <li>✅ Configure <code>MappingJackson2MessageConverter</code> with <code>MessageType.TEXT</code> and <code>_type</code> property ID</li>
+    <li>✅ Refactor a raw String messaging system into a typed POJO JSON pipeline</li>
+    <li>✅ Verify JSON payloads and header properties inside the ActiveMQ Artemis Web Console</li>
+    <li>✅ Avoid the missing default constructor trap during Jackson deserialization</li>
+  </ul>
+
+  <!-- ============================================================ -->
+
+  <h2>What's Next</h2>
+
+  <p>In <strong>Lesson 06: Topics &amp; Pub/Sub Patterns</strong>, we will move beyond point-to-point queues! You'll learn how to broadcast a single notification to multiple independent consumer services simultaneously (e.g. Email Service, SMS Service, and Audit Log Service) using JMS Topics and Publish-Subscribe architecture.</p>
+
+  <!-- ============================================================ -->
+
+  <div class="teacher-prompt">
+    <strong>💬 Ready to test your mastery?</strong><br>
+    Once you've added <code>NotificationMessage.java</code> and <code>JmsConfig.java</code> to your project, run the application and try out Experiment A in the web console.
+    <br><br>
+    When you're ready, type <strong><code>/grill-me</code></strong> and I will interview you on JSON message conversion, type IDs, and enterprise serialization gotchas! Or say <strong>"Start Lesson 06"</strong> to jump straight into Pub/Sub Topics.
+  </div>
+
+  <div class="lesson-nav">
+    <a href="0004-spring-profiles-environment-configuration.html">← Lesson 04: Spring Profiles</a>
+    <a href="0006-topics-and-pub-sub-patterns.html">Next: Lesson 06 — Topics &amp; Pub/Sub →</a>
+  </div>
+
+  <script src="../assets/quiz.js"></script>
+
+</body>
+</html>
