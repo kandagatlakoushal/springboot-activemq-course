@@ -1,0 +1,14 @@
+{
+    "configurations": [
+        {
+            "type": "java",
+            "name": "Spring Boot-NotificationHubApplication<NotificationHub>",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "mainClass": "com.learningPath.springProfileAmq.NotificationHub.NotificationHubApplication",
+            "projectName": "NotificationHub",
+            "args": "",
+            "envFile": "${workspaceFolder}/.env"
+        }
+    ]
+}
