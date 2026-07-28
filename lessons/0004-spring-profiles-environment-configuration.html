@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 04 — Spring Profiles: Environment Configuration</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <div class="lesson-header">
+    <span class="lesson-badge badge-beginner">Day 2</span>
+    <h1>Spring Profiles: Environment Configuration</h1>
+    <p>Switch between dev, test, and prod without changing a single line of Java code</p>
+    <div class="lesson-meta">
+      <span>📅 Lesson 04 of 14</span>
+      <span>⏱ 35 min (read + refactor)</span>
+      <span>🎯 Project: Notification Hub (upgrade)</span>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>What You'll Learn</h2>
+
+  <ul>
+    <li>What Spring Profiles are and the real problem they solve</li>
+    <li>How <code>application.yml</code> and <code>application-{profile}.yml</code> merge together</li>
+    <li>Three ways to activate a profile (CLI, env var, YAML)</li>
+    <li>Refactor your Notification Hub to use dev and prod profiles</li>
+    <li>Why enterprise teams at S&amp;P Global MI use profiles for every environment</li>
+  </ul>
+
+  <div class="callout callout-success">
+    <div class="callout-label">Primary Resource</div>
+    <p><a href="https://docs.spring.io/spring-boot/reference/features/profiles.html">Spring Boot Reference: Profiles</a> — Official documentation. Read alongside this lesson for the canonical explanation.</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 1: The Problem Profiles Solve</h2>
+
+  <h3>Your Current Situation</h3>
+
+  <p>Right now, your Notification Hub has <strong>one</strong> <code>application.yml</code> with everything hardcoded:</p>
+
+  <pre data-lang="yaml"><code><span class="cmt"># Your current application.yml — EVERYTHING in one place</span>
+spring:
+  artemis:
+    mode: native
+    broker-url: tcp://localhost:61616      <span class="cmt"># ← only works on YOUR laptop</span>
+    user: admin                            <span class="cmt"># ← dev credentials</span>
+    password: admin
+
+server:
+  port: 8081                               <span class="cmt"># ← your dev port</span>
+
+app:
+  queue:
+    notification: notification.queue</code></pre>
+
+  <p>This works fine on your laptop. But what happens when this goes to production?</p>
+
+  <div class="diagram">
+    <pre><code>
+  THE DEPLOYMENT PROBLEM
+  ══════════════════════
+
+  Your Laptop (dev)                     Production Server
+  ──────────────────                    ──────────────────
+  Broker: localhost:61616               Broker: broker.prod.spglobal.com:61616
+  User:   admin                         User:   svc-notification-prod
+  Pass:   admin                         Pass:   (rotated secret)
+  Port:   8081                          Port:   8080
+  Queue:  notification.queue            Queue:  prod.notification.queue
+  Logs:   DEBUG level                   Logs:   WARN level
+
+  ❌ If you hardcode "localhost:61616" into your code, it will NEVER
+     connect in production. You'd have to change code for each deploy.
+
+  ✅ Solution: Spring Profiles — ONE codebase, MULTIPLE configurations.
+    </code></pre>
+  </div>
+
+  <div class="callout callout-danger">
+    <div class="callout-label">Interview Insight</div>
+    <p>"Spring Profiles let us deploy the exact same JAR artifact to dev, staging, and production. The environment tells the app which profile to activate, and the app loads the right configuration. No code changes, no rebuilds — just a runtime switch."</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 2: How Profiles Work</h2>
+
+  <h3>The Property Resolution Model</h3>
+
+  <p>Spring Boot loads properties in a <strong>layered</strong> model. Higher layers override lower ones:</p>
+
+  <div class="diagram">
+    <pre><code>
+  PROPERTY RESOLUTION ORDER (highest priority wins)
+  ══════════════════════════════════════════════════
+
+  ┌─────────────────────────────────────────┐
+  │  1. Command-line arguments              │  ← highest priority
+  │     --spring.artemis.broker-url=...     │     (useful for one-off overrides)
+  ├─────────────────────────────────────────┤
+  │  2. Environment variables               │  ← second highest
+  │     SPRING_ARTEMIS_BROKER_URL=...       │     (common in Docker/Kubernetes)
+  ├─────────────────────────────────────────┤
+  │  3. Profile-specific config             │  ← third
+  │     application-dev.yml                 │     (the main mechanism)
+  │     application-prod.yml                │
+  ├─────────────────────────────────────────┤
+  │  4. Base application.yml                │  ← lowest priority
+  │     (shared defaults for all envs)      │     (always loaded)
+  └─────────────────────────────────────────┘
+
+  Example: If application.yml says port=8080
+           and application-dev.yml says port=8081
+           and you pass --server.port=9090 on CLI
+           → The app runs on port 9090 (CLI wins)
+    </code></pre>
+  </div>
+
+  <h3>The Merge Rule</h3>
+
+  <p>The base <code>application.yml</code> is <strong>always loaded</strong>. The profile-specific file <strong>merges on top</strong>:</p>
+
+  <pre data-lang="yaml"><code><span class="cmt"># application.yml (base — ALWAYS loaded)</span>
+spring:
+  application:
+    name: NotificationHub
+app:
+  queue:
+    notification: notification.queue
+logging:
+  level:
+    root: INFO
+
+<span class="cmt"># application-dev.yml (loaded ONLY when profile = "dev")</span>
+<span class="cmt"># These properties OVERRIDE or ADD to the base</span>
+spring:
+  artemis:
+    mode: native
+    broker-url: tcp://localhost:61616
+    user: admin
+    password: admin
+server:
+  port: 8081
+logging:
+  level:
+    com.learningPath: DEBUG             <span class="cmt"># verbose logs in dev</span>
+
+<span class="cmt"># application-prod.yml (loaded ONLY when profile = "prod")</span>
+spring:
+  artemis:
+    mode: native
+    broker-url: tcp://broker.prod.internal:61616
+    user: ${ARTEMIS_PROD_USER}          <span class="cmt"># from environment variable</span>
+    password: ${ARTEMIS_PROD_PASSWORD}  <span class="cmt"># NEVER hardcode prod creds</span>
+server:
+  port: 8080
+logging:
+  level:
+    root: WARN                          <span class="cmt"># quiet logs in prod</span></code></pre>
+
+  <p><strong>What the app sees when running with <code>dev</code> profile:</strong></p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Property</th>
+        <th>Source</th>
+        <th>Value</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>spring.application.name</code></td>
+        <td>base (no override)</td>
+        <td><code>NotificationHub</code></td>
+      </tr>
+      <tr>
+        <td><code>app.queue.notification</code></td>
+        <td>base (no override)</td>
+        <td><code>notification.queue</code></td>
+      </tr>
+      <tr>
+        <td><code>spring.artemis.broker-url</code></td>
+        <td><strong>application-dev.yml</strong></td>
+        <td><code>tcp://localhost:61616</code></td>
+      </tr>
+      <tr>
+        <td><code>server.port</code></td>
+        <td><strong>application-dev.yml</strong></td>
+        <td><code>8081</code></td>
+      </tr>
+      <tr>
+        <td><code>logging.level.com.learningPath</code></td>
+        <td><strong>application-dev.yml</strong></td>
+        <td><code>DEBUG</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>Properties from the <strong>base file stay</strong>. Properties from the <strong>profile file override or add</strong>. That's the merge.</p>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 3: Activating Profiles</h2>
+
+  <p>Three ways to tell Spring Boot which profile to use. Each maps to a different deployment scenario:</p>
+
+  <h3>Method 1: Command-Line Argument</h3>
+
+  <pre data-lang="bash"><code><span class="cmt"># Run with dev profile</span>
+java -jar notification-hub.jar --spring.profiles.active=dev
+
+<span class="cmt"># Or with Maven</span>
+./mvnw spring-boot:run -Dspring-boot.run.profiles=dev</code></pre>
+
+  <p><strong>When to use:</strong> Local development, quick testing. You type it yourself.</p>
+
+  <h3>Method 2: Environment Variable</h3>
+
+  <pre data-lang="bash"><code><span class="cmt"># Set before running the app</span>
+export SPRING_PROFILES_ACTIVE=prod
+java -jar notification-hub.jar
+
+<span class="cmt"># In Docker (most common in production)</span>
+docker run -e SPRING_PROFILES_ACTIVE=prod my-app:latest</code></pre>
+
+  <p><strong>When to use:</strong> Production deployments, Docker, Kubernetes. The <em>environment</em> controls the profile, not the developer.</p>
+
+  <h3>Method 3: In the Base application.yml</h3>
+
+  <pre data-lang="yaml"><code><span class="cmt"># application.yml</span>
+spring:
+  profiles:
+    active: dev   <span class="cmt"># default profile — overridden by CLI or env var</span></code></pre>
+
+  <p><strong>When to use:</strong> Setting a sensible default for local development. The developer doesn't have to remember to pass a flag.</p>
+
+  <div class="callout callout-info">
+    <div class="callout-label">Infrastructure Detail: How This Works in Enterprise</div>
+    <p>At companies like S&amp;P Global MI, you never set the profile in the YAML file committed to Git. Instead:</p>
+    <ul>
+      <li><strong>Dev:</strong> IDE launch config sets <code>--spring.profiles.active=dev</code></li>
+      <li><strong>Staging/QA:</strong> Kubernetes <code>Deployment.yaml</code> sets the env var <code>SPRING_PROFILES_ACTIVE=staging</code></li>
+      <li><strong>Production:</strong> Kubernetes sets <code>SPRING_PROFILES_ACTIVE=prod</code></li>
+    </ul>
+    <p>The JAR artifact is the <strong>same binary</strong> deployed to every environment. Only the profile activation changes.</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 4: Refactor Your Notification Hub</h2>
+
+  <p>Let's upgrade your project. You'll split your current single <code>application.yml</code> into three files.</p>
+
+  <h3>Step 1: Refactor application.yml (Base — Shared Config)</h3>
+
+  <p>Keep only environment-<strong>agnostic</strong> properties here:</p>
+
+  <pre data-lang="yaml"><code><span class="cmt"># src/main/resources/application.yml</span>
+<span class="cmt"># BASE CONFIG — shared across ALL environments</span>
+<span class="cmt"># No broker URLs, no credentials, no ports here!</span>
+
+spring:
+  application:
+    name: NotificationHub
+  profiles:
+    active: dev                         <span class="cmt"># default to dev for local development</span>
+
+app:
+  queue:
+    notification: notification.queue    <span class="cmt"># queue name is the same everywhere</span></code></pre>
+
+  <h3>Step 2: Create application-dev.yml</h3>
+
+  <p>Create a new file <code>src/main/resources/application-dev.yml</code>:</p>
+
+  <pre data-lang="yaml"><code><span class="cmt"># src/main/resources/application-dev.yml</span>
+<span class="cmt"># DEV PROFILE — local Docker Artemis broker</span>
+
+spring:
+  artemis:
+    mode: native
+    broker-url: tcp://localhost:61616
+    user: admin
+    password: admin
+
+server:
+  port: 8081
+
+logging:
+  level:
+    com.learningPath: DEBUG             <span class="cmt"># see detailed logs during development</span></code></pre>
+
+  <h3>Step 3: Create application-prod.yml</h3>
+
+  <p>Create <code>src/main/resources/application-prod.yml</code>:</p>
+
+  <pre data-lang="yaml"><code><span class="cmt"># src/main/resources/application-prod.yml</span>
+<span class="cmt"># PROD PROFILE — production Artemis broker</span>
+
+spring:
+  artemis:
+    mode: native
+    broker-url: tcp://broker.prod.internal:61616
+    user: ${ARTEMIS_PROD_USER}           <span class="cmt"># injected from env var at runtime</span>
+    password: ${ARTEMIS_PROD_PASSWORD}   <span class="cmt"># NEVER commit real creds to Git</span>
+
+server:
+  port: 8080
+
+logging:
+  level:
+    root: WARN                           <span class="cmt"># only warnings and errors in prod</span>
+    com.learningPath: INFO               <span class="cmt"># minimal app logs in prod</span></code></pre>
+
+  <h3>Step 4: Create application-test.yml (Bonus)</h3>
+
+  <p>Create <code>src/main/resources/application-test.yml</code> for integration tests:</p>
+
+  <pre data-lang="yaml"><code><span class="cmt"># src/main/resources/application-test.yml</span>
+<span class="cmt"># TEST PROFILE — embedded broker (no Docker needed)</span>
+
+spring:
+  artemis:
+    mode: embedded                       <span class="cmt"># starts broker INSIDE your JVM</span>
+
+server:
+  port: 0                                <span class="cmt"># random port (avoids conflicts in CI)</span>
+
+logging:
+  level:
+    root: WARN</code></pre>
+
+  <div class="callout callout-info">
+    <div class="callout-label">Infrastructure Detail: Embedded Mode</div>
+    <p>When <code>spring.artemis.mode=embedded</code>, Spring Boot starts a mini Artemis broker <strong>inside your application's JVM</strong>. No Docker, no external process. The broker lives in memory, dies when your app dies.</p>
+    <p>This is perfect for tests — every test run gets a clean broker with no leftover messages. To enable embedded mode, you need one extra dependency:</p>
+    <pre data-lang="xml"><code><span class="cmt">&lt;!-- Add to pom.xml for embedded broker support --&gt;</span>
+&lt;dependency&gt;
+    &lt;groupId&gt;org.apache.activemq&lt;/groupId&gt;
+    &lt;artifactId&gt;artemis-jakarta-server&lt;/artifactId&gt;
+    &lt;scope&gt;test&lt;/scope&gt;            <span class="cmt">&lt;!-- only for testing, not production --&gt;</span>
+&lt;/dependency&gt;</code></pre>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Step 5: Run &amp; Verify</h2>
+
+  <h3>Your Project Structure Now</h3>
+
+  <pre data-lang="bash"><code>src/main/resources/
+├── application.yml              <span class="cmt"># shared base (app name, queue names)</span>
+├── application-dev.yml          <span class="cmt"># dev: localhost broker, port 8081, DEBUG logs</span>
+├── application-prod.yml         <span class="cmt"># prod: remote broker, port 8080, WARN logs</span>
+└── application-test.yml         <span class="cmt"># test: embedded broker, random port</span></code></pre>
+
+  <h3>Run with Dev Profile</h3>
+
+  <pre data-lang="bash"><code><span class="cmt"># Option A: Maven (uses default from application.yml)</span>
+./mvnw spring-boot:run
+
+<span class="cmt"># Option B: Explicit profile</span>
+./mvnw spring-boot:run -Dspring-boot.run.profiles=dev</code></pre>
+
+  <p>Look for this in the startup logs:</p>
+
+  <pre data-lang="bash"><code><span class="cmt"># This confirms which profile is active</span>
+The following 1 profile is active: "dev"</code></pre>
+
+  <h3>Test That Everything Still Works</h3>
+
+  <pre data-lang="bash"><code><span class="cmt"># Send a notification (same as Lesson 03)</span>
+curl -X POST http://localhost:8081/app/notify \
+  -H "Content-Type: text/plain" \
+  -d "Profile test from dev!"</code></pre>
+
+  <p>You should see the same send + receive logs, but now with <code>DEBUG</code> level logging active.</p>
+
+  <!-- ============================================================ -->
+
+  <h2>Step 6: Experiment (Desirable Difficulty)</h2>
+
+  <div class="card">
+    <h3>🧪 Experiment A: Switch Profiles on the Fly</h3>
+    <ol>
+      <li>Stop the app</li>
+      <li>Run with prod profile: <code>./mvnw spring-boot:run -Dspring-boot.run.profiles=prod</code></li>
+      <li>Watch it <strong>fail to connect</strong> — because <code>broker.prod.internal:61616</code> doesn't exist on your network</li>
+      <li>This proves the profile switch is real — the app tried to connect to a <em>different</em> broker</li>
+    </ol>
+    <p><strong>This demonstrates:</strong> Same code, different behavior, controlled by a single flag.</p>
+  </div>
+
+  <div class="card">
+    <h3>🧪 Experiment B: Override with Environment Variable</h3>
+    <pre data-lang="bash"><code><span class="cmt"># Even with prod profile, override the broker URL</span>
+SPRING_ARTEMIS_BROKER_URL=tcp://localhost:61616 \
+ARTEMIS_PROD_USER=admin \
+ARTEMIS_PROD_PASSWORD=admin \
+./mvnw spring-boot:run -Dspring-boot.run.profiles=prod</code></pre>
+    <p><strong>This demonstrates:</strong> Env vars override profile YAML. This is how Kubernetes injects secrets — the YAML points to <code>${VARIABLE}</code> and the orchestrator provides the value.</p>
+  </div>
+
+  <div class="card">
+    <h3>🧪 Experiment C: Check Active Profile at Runtime</h3>
+    <p>Add this to your <code>NotificationHubApplication.java</code> to print the active profile on startup:</p>
+    <pre data-lang="java"><code><span class="ann">@SpringBootApplication</span>
+<span class="kw">public class</span> <span class="typ">NotificationHubApplication</span> {
+
+    <span class="kw">public static void</span> main(<span class="typ">String</span>[] args) {
+        <span class="typ">ConfigurableApplicationContext</span> ctx =
+            SpringApplication.run(NotificationHubApplication.<span class="kw">class</span>, args);
+
+        <span class="typ">String</span>[] profiles = ctx.getEnvironment().getActiveProfiles();
+        System.out.println(<span class="str">"🔧 Active profiles: "</span> + String.join(<span class="str">", "</span>, profiles));
+    }
+}</code></pre>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>The Big Picture: Profiles + Messaging Together</h2>
+
+  <div class="diagram">
+    <pre><code>
+  SAME JAR DEPLOYED TO THREE ENVIRONMENTS
+  ═══════════════════════════════════════════════════════════════════
+
+  ┌─ Dev (your laptop) ──────────────────────────────────────────┐
+  │  SPRING_PROFILES_ACTIVE=dev                                  │
+  │  App ──tcp://localhost:61616──→ Docker Artemis               │
+  │  Port: 8081  |  Logs: DEBUG  |  Creds: admin/admin           │
+  └──────────────────────────────────────────────────────────────┘
+
+  ┌─ Staging (AWS / K8s) ───────────────────────────────────────┐
+  │  SPRING_PROFILES_ACTIVE=staging                              │
+  │  App ──tcp://broker.staging.internal:61616──→ Amazon MQ      │
+  │  Port: 8080  |  Logs: INFO   |  Creds: from K8s secret      │
+  └──────────────────────────────────────────────────────────────┘
+
+  ┌─ Production (AWS / K8s) ────────────────────────────────────┐
+  │  SPRING_PROFILES_ACTIVE=prod                                 │
+  │  App ──tcp://broker.prod.internal:61616──→ Amazon MQ cluster │
+  │  Port: 8080  |  Logs: WARN   |  Creds: from Vault/K8s       │
+  └──────────────────────────────────────────────────────────────┘
+
+  ONE JAR. ZERO CODE CHANGES. THE PROFILE DECIDES EVERYTHING.
+    </code></pre>
+  </div>
+
+  <div class="callout callout-danger">
+    <div class="callout-label">Interview Insight</div>
+    <p>"We build once, deploy everywhere. The JAR is immutable. Spring Profiles plus environment variables control which broker, which credentials, and which log level the application uses. In Kubernetes, the <code>Deployment</code> manifest injects <code>SPRING_PROFILES_ACTIVE</code> as an env var, and secrets come from <code>ConfigMaps</code> or <code>Vault</code>."</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Knowledge Check</h2>
+
+  <div class="quiz" data-quiz="q1">
+    <p class="quiz-question">When you activate the <code>dev</code> profile, which files does Spring Boot load?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="The base application.yml is ALWAYS loaded. The profile-specific file merges on top — profile properties override base properties.">Both <code>application.yml</code> (base) AND <code>application-dev.yml</code> (profile), with profile values winning on conflicts</li>
+      <li>Only <code>application-dev.yml</code> — the base <code>application.yml</code> is completely ignored when any profile is active</li>
+      <li>Only <code>application.yml</code> — profile files are only loaded if explicitly imported with <code>spring.config.import</code></li>
+      <li>All files: <code>application.yml</code>, <code>application-dev.yml</code>, <code>application-prod.yml</code>, and <code>application-test.yml</code> together</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <div class="quiz" data-quiz="q2">
+    <p class="quiz-question">Your <code>application-prod.yml</code> uses <code>${ARTEMIS_PROD_PASSWORD}</code>. What does this syntax do?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="The ${} syntax resolves to an environment variable at runtime. This is how production credentials are injected without committing them to Git.">Resolves to an environment variable of that name at runtime — the value comes from the OS/container, never committed to Git</li>
+      <li>References a Spring bean named ARTEMIS_PROD_PASSWORD and calls its toString() method to get the password value</li>
+      <li>Looks up the value from a centralized Spring Cloud Config Server that must be running on a separate port</li>
+      <li>Generates a random password at startup and stores it in a file named ARTEMIS_PROD_PASSWORD for later reference</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <div class="quiz" data-quiz="q3">
+    <p class="quiz-question">You run: <code>SPRING_ARTEMIS_BROKER_URL=tcp://custom:61616 java -jar app.jar --spring.profiles.active=dev</code>. Your <code>application-dev.yml</code> says <code>broker-url: tcp://localhost:61616</code>. Which broker does the app connect to?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="Environment variables have higher priority than profile-specific YAML files. So the env var wins: tcp://custom:61616.">tcp://custom:61616 — environment variables override profile-specific YAML properties in the priority order</li>
+      <li>tcp://localhost:61616 — profile-specific YAML always takes the highest priority over any other source</li>
+      <li>The application fails to start because of a conflict between the two different broker URL values</li>
+      <li>It depends on which was defined first — Spring Boot uses a first-defined-wins strategy for properties</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <div class="quiz" data-quiz="q4">
+    <p class="quiz-question">What does <code>spring.artemis.mode=embedded</code> do differently from <code>native</code>?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="Embedded starts a broker INSIDE your JVM. No Docker, no separate process. Perfect for tests — clean state every run.">Starts an Artemis broker inside the application's own JVM process — no external broker needed, ideal for testing</li>
+      <li>Connects to a broker that's running on the same machine but uses shared memory instead of TCP sockets</li>
+      <li>Downloads and installs Artemis locally, then connects to it via TCP on the default port automatically</li>
+      <li>Uses Spring Boot's built-in message queue implementation instead of the real ActiveMQ Artemis engine</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Your Checkpoint</h2>
+
+  <ul>
+    <li>✅ Explain why profiles exist: same JAR, different environments, zero code changes</li>
+    <li>✅ Know the property resolution order: CLI &gt; env vars &gt; profile YAML &gt; base YAML</li>
+    <li>✅ Split your Notification Hub config into base + dev + prod + test files</li>
+    <li>✅ Activate a profile via CLI, env var, or YAML default</li>
+    <li>✅ Use <code>${VARIABLE}</code> syntax for production secrets</li>
+    <li>✅ Understand embedded vs native broker modes</li>
+  </ul>
+
+  <!-- ============================================================ -->
+
+  <h2>What's Next</h2>
+
+  <p>In <strong>Lesson 05</strong>, you'll upgrade your Notification Hub to send <strong>Java objects (POJOs) as JSON</strong> instead of plain strings. You'll configure <code>MappingJackson2MessageConverter</code> and learn what a <code>type ID</code> is and why the consumer needs it to deserialize messages.</p>
+
+  <!-- ============================================================ -->
+
+  <div class="teacher-prompt">
+    <strong>💬 Questions?</strong><br>
+    Profile resolution confusing? Not sure where to put a property? Ask me — these are exactly the kinds of questions that come up in interviews.
+    <br><br>
+    When you've completed the refactor and experiments, ask me to start <strong>Lesson 05: JSON Messages &amp; MessageConverter</strong>.
+  </div>
+
+  <div class="lesson-nav">
+    <a href="0003-your-first-queue-send-and-receive.html">← Lesson 03: First Queue</a>
+    <a href="0005-json-messages-and-messageconverter.html">Next: Lesson 05 — JSON Messages →</a>
+  </div>
+
+  <script src="../assets/quiz.js"></script>
+
+</body>
+</html>
