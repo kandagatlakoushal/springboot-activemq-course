@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 06 — Topics & Pub/Sub Patterns</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <div class="lesson-header">
+    <span class="lesson-badge badge-intermediate">Day 3</span>
+    <h1>Topics &amp; Pub/Sub Patterns</h1>
+    <p>Broadcast one event to many independent consumers — the backbone of event-driven architecture</p>
+    <div class="lesson-meta">
+      <span>📅 Lesson 06 of 14</span>
+      <span>⏱ 45 min (read + code)</span>
+      <span>🎯 Project: Notification Hub (multi-consumer upgrade)</span>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>What You'll Learn</h2>
+
+  <ul>
+    <li>The fundamental difference between <strong>Queues</strong> (point-to-point) and <strong>Topics</strong> (publish-subscribe) at the infrastructure level</li>
+    <li>Why enterprise systems use Topics for event broadcasting (audit logs, analytics, notifications)</li>
+    <li>How to configure a dedicated <code>JmsListenerContainerFactory</code> for topic subscriptions in Spring Boot</li>
+    <li>How to build multiple independent consumers that each receive every message from a single topic</li>
+    <li>The critical <code>pubSubDomain</code> flag and what happens if you forget it</li>
+  </ul>
+
+  <div class="callout callout-success">
+    <div class="callout-label">Primary Resource</div>
+    <p><a href="https://docs.spring.io/spring-boot/reference/messaging/jms.html">Spring Boot Reference: JMS</a> — See the section on customizing <code>JmsListenerContainerFactory</code> for topic vs queue distinction.</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 1: Queues vs Topics — The Infrastructure Model</h2>
+
+  <h3>Queue: Point-to-Point (What You Built So Far)</h3>
+
+  <p>In Lessons 03–05, you used a <strong>Queue</strong>. In queue-based messaging, each message is consumed by <strong>exactly one consumer</strong>. If three instances of your app are listening on the same queue, the broker load-balances — each message goes to only one of them.</p>
+
+  <div class="diagram">
+    <pre><code>
+  QUEUE: POINT-TO-POINT (Competing Consumers)
+  ════════════════════════════════════════════
+
+  Producer ──→ [ notification.queue ] ──→ Consumer A  ✓ gets msg 1
+                                     ──→ Consumer B  ✓ gets msg 2
+                                     ──→ Consumer C  ✓ gets msg 3
+
+  Each message delivered to EXACTLY ONE consumer.
+  The broker round-robins across consumers.
+  Use case: Work distribution, task processing, order fulfillment.
+    </code></pre>
+  </div>
+
+  <h3>Topic: Publish-Subscribe (What We're Building Now)</h3>
+
+  <p>A <strong>Topic</strong> is fundamentally different. Every message published to a topic is delivered to <strong>ALL active subscribers</strong>. Each subscriber gets its own independent copy.</p>
+
+  <div class="diagram">
+    <pre><code>
+  TOPIC: PUBLISH-SUBSCRIBE (Fan-Out / Broadcast)
+  ═══════════════════════════════════════════════
+
+                                     ┌──→ Email Service     ✓ gets EVERY message
+  Producer ──→ [ order.events ] ─────┼──→ SMS Service       ✓ gets EVERY message
+                                     ├──→ Audit Logger      ✓ gets EVERY message
+                                     └──→ Analytics Engine  ✓ gets EVERY message
+
+  Each message delivered to ALL subscribers simultaneously.
+  Subscribers are independent — they don't know about each other.
+  Use case: Event notification, audit logging, real-time analytics.
+    </code></pre>
+  </div>
+
+  <h3>When to Use Which?</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Criteria</th>
+        <th>Queue (Point-to-Point)</th>
+        <th>Topic (Pub/Sub)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Delivery</strong></td>
+        <td>One consumer per message</td>
+        <td>All subscribers get every message</td>
+      </tr>
+      <tr>
+        <td><strong>Consumer Coupling</strong></td>
+        <td>Consumers compete for messages</td>
+        <td>Consumers are completely independent</td>
+      </tr>
+      <tr>
+        <td><strong>Use Case</strong></td>
+        <td>Task distribution (process this order)</td>
+        <td>Event broadcasting (an order was placed)</td>
+      </tr>
+      <tr>
+        <td><strong>If No Consumer Active</strong></td>
+        <td>Messages wait in the queue</td>
+        <td>Messages are <strong>lost!</strong> (unless durable subscriber)</td>
+      </tr>
+      <tr>
+        <td><strong>S&amp;P Example</strong></td>
+        <td>Process credit rating calculation</td>
+        <td>Broadcast "new rating published" event</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout callout-danger">
+    <div class="callout-label">Interview Insight</div>
+    <p>"In event-driven architectures, we use <strong>Queues for commands</strong> (do this work) and <strong>Topics for events</strong> (this thing happened). A queue says 'process this order.' A topic says 'an order was placed' — and whoever cares can listen. The producer doesn't know or care how many consumers exist."</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 2: The Infrastructure Detail — How Topics Work at the Broker</h2>
+
+  <div class="diagram">
+    <pre><code>
+  WHAT HAPPENS INSIDE ARTEMIS WHEN YOU PUBLISH TO A TOPIC
+  ═══════════════════════════════════════════════════════════
+
+  1. Producer sends message to address "notification.events" (topic)
+         │
+         ▼
+  2. Artemis looks up all ACTIVE SUBSCRIPTIONS on this address
+         │
+         ├──→ Subscription 1: EmailService  (connected via TCP)
+         ├──→ Subscription 2: SmsService    (connected via TCP)
+         └──→ Subscription 3: AuditLogger   (connected via TCP)
+         │
+         ▼
+  3. Artemis creates a COPY of the message for each subscription
+     and delivers independently to each consumer thread
+
+  ⚠️ KEY DIFFERENCE FROM QUEUES:
+     - Queue: Broker has ONE copy, delivers to ONE consumer
+     - Topic: Broker creates N copies for N subscribers
+     - Topic: If NO subscribers are active, the message is DISCARDED
+       (unless using Durable Subscriptions — covered in Lesson 12)
+    </code></pre>
+  </div>
+
+  <div class="callout callout-info">
+    <div class="callout-label">Infrastructure Detail: Artemis Addressing Model</div>
+    <p>Artemis uses an <strong>address model</strong> that unifies queues and topics under a single abstraction:</p>
+    <ul>
+      <li>An <strong>address</strong> is a named routing endpoint (like <code>notification.events</code>)</li>
+      <li>A <strong>multicast</strong> address behaves as a Topic — messages go to all bound queues</li>
+      <li>An <strong>anycast</strong> address behaves as a Queue — messages go to one bound queue</li>
+    </ul>
+    <p>When Spring sets <code>pubSubDomain=true</code>, it tells Artemis to treat the destination as a <strong>multicast</strong> address.</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 3: The <code>pubSubDomain</code> Problem</h2>
+
+  <p>Here's the critical gotcha that trips up every beginner: Spring Boot's auto-configured <code>JmsListenerContainerFactory</code> defaults to <strong>queue mode</strong> (<code>pubSubDomain = false</code>). If you use <code>@JmsListener</code> on a topic destination without setting this flag, the listener will behave as a queue consumer — only one instance gets each message!</p>
+
+  <p>The fix is to create a <strong>separate factory bean</strong> for topic listeners:</p>
+
+  <div class="diagram">
+    <pre><code>
+  TWO FACTORIES, TWO MODES
+  ════════════════════════
+
+  Default Factory (auto-configured)
+  ├── pubSubDomain = false (queue mode)
+  └── Used by: @JmsListener(destination = "notification.queue")
+
+  Custom "topicFactory" Bean (you create this)
+  ├── pubSubDomain = true (topic mode)
+  └── Used by: @JmsListener(destination = "notification.events",
+                             containerFactory = "topicFactory")
+    </code></pre>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 4: Build It — Upgrade Your Notification Hub</h2>
+
+  <p>We will add topic-based broadcasting to your existing project. When a notification is sent, it now goes to BOTH a queue (for processing) AND a topic (for broadcasting to Email, SMS, and Audit services).</p>
+
+  <h3>Step 1: Update application.yml (Base Config)</h3>
+
+  <p>Add the topic destination name to your shared base config:</p>
+
+  <pre data-lang="yaml"><code><span class="cmt"># src/main/resources/application.yml — add topic destination</span>
+spring:
+  application:
+    name: NotificationHub
+  profiles:
+    active: dev
+
+app:
+  queue:
+    notification: notification.queue     <span class="cmt"># existing queue (point-to-point)</span>
+  topic:
+    notification: notification.events    <span class="cmt"># NEW topic (pub/sub broadcast)</span></code></pre>
+
+  <h3>Step 2: Update JmsConfig — Add the Topic Factory</h3>
+
+  <p>Add a second factory bean to your existing <code>JmsConfig.java</code>:</p>
+
+  <pre data-lang="java"><code><span class="cmt">// src/main/java/.../Config/JmsConfig.java</span>
+<span class="kw">package</span> com.learningPath.springProfileAmq.NotificationHub.Config;
+
+<span class="kw">import</span> jakarta.jms.ConnectionFactory;
+<span class="kw">import</span> org.springframework.context.annotation.Bean;
+<span class="kw">import</span> org.springframework.context.annotation.Configuration;
+<span class="kw">import</span> org.springframework.jms.config.DefaultJmsListenerContainerFactory;
+<span class="kw">import</span> org.springframework.jms.config.JmsListenerContainerFactory;
+<span class="kw">import</span> org.springframework.jms.support.converter.MappingJackson2MessageConverter;
+<span class="kw">import</span> org.springframework.jms.support.converter.MessageConverter;
+<span class="kw">import</span> org.springframework.jms.support.converter.MessageType;
+
+<span class="ann">@Configuration</span>
+<span class="kw">public class</span> <span class="typ">JmsConfig</span> {
+
+    <span class="cmt">// Existing bean from Lesson 05 — JSON message conversion</span>
+    <span class="ann">@Bean</span>
+    <span class="kw">public</span> <span class="typ">MessageConverter</span> jacksonJmsMessageConverter() {
+        <span class="typ">MappingJackson2MessageConverter</span> converter = <span class="kw">new</span> <span class="typ">MappingJackson2MessageConverter</span>();
+        converter.setTargetType(MessageType.TEXT);
+        converter.setTypeIdPropertyName(<span class="str">"_type"</span>);
+        <span class="kw">return</span> converter;
+    }
+
+    <span class="cmt">// NEW — Factory for Topic (pub/sub) listeners</span>
+    <span class="ann">@Bean</span>
+    <span class="kw">public</span> <span class="typ">JmsListenerContainerFactory</span>&lt;?&gt; topicFactory(
+            <span class="typ">ConnectionFactory</span> connectionFactory,
+            <span class="typ">MessageConverter</span> messageConverter) {
+
+        <span class="typ">DefaultJmsListenerContainerFactory</span> factory = <span class="kw">new</span> <span class="typ">DefaultJmsListenerContainerFactory</span>();
+        factory.setConnectionFactory(connectionFactory);     <span class="cmt">// same Artemis connection</span>
+        factory.setMessageConverter(messageConverter);        <span class="cmt">// reuse our Jackson converter</span>
+        factory.setPubSubDomain(<span class="kw">true</span>);                        <span class="cmt">// ← THE CRITICAL FLAG!</span>
+        <span class="kw">return</span> factory;
+    }
+}</code></pre>
+
+  <div class="callout callout-warning">
+    <div class="callout-label">The Most Common Mistake</div>
+    <p>If you forget <code>factory.setPubSubDomain(true)</code>, your <code>@JmsListener</code> will subscribe to a <strong>queue</strong> named <code>notification.events</code> instead of a <strong>topic</strong>. Only one consumer will receive each message. You'll spend hours debugging why your Email and SMS services aren't both getting the same event.</p>
+  </div>
+
+  <h3>Step 3: Update NotificationSender — Publish to the Topic</h3>
+
+  <p>Add a topic publishing method alongside your existing queue send:</p>
+
+  <pre data-lang="java"><code><span class="cmt">// src/main/java/.../Service/NotificationSender.java</span>
+<span class="kw">package</span> com.learningPath.springProfileAmq.NotificationHub.Service;
+
+<span class="kw">import</span> org.slf4j.Logger;
+<span class="kw">import</span> org.slf4j.LoggerFactory;
+<span class="kw">import</span> org.springframework.beans.factory.annotation.Value;
+<span class="kw">import</span> org.springframework.jms.core.JmsTemplate;
+<span class="kw">import</span> org.springframework.stereotype.Service;
+<span class="kw">import</span> com.learningPath.springProfileAmq.NotificationHub.Model.NotificationMessage;
+
+<span class="ann">@Service</span>
+<span class="kw">public class</span> <span class="typ">NotificationSender</span> {
+
+    <span class="kw">private final</span> <span class="typ">Logger</span> log = LoggerFactory.getLogger(<span class="kw">this</span>.getClass());
+    <span class="kw">private final</span> <span class="typ">JmsTemplate</span> jmsTemplate;
+
+    <span class="ann">@Value</span>(<span class="str">"${app.queue.notification}"</span>)
+    <span class="kw">private</span> <span class="typ">String</span> queueName;
+
+    <span class="ann">@Value</span>(<span class="str">"${app.topic.notification}"</span>)
+    <span class="kw">private</span> <span class="typ">String</span> topicName;
+
+    <span class="kw">public</span> <span class="typ">NotificationSender</span>(<span class="typ">JmsTemplate</span> jmsTemplate) {
+        <span class="kw">this</span>.jmsTemplate = jmsTemplate;
+    }
+
+    <span class="cmt">// Existing — send to queue (point-to-point processing)</span>
+    <span class="kw">public void</span> sendToQueue(<span class="typ">NotificationMessage</span> message) {
+        log.info(<span class="str">"📤 [QUEUE] Sending to [{}]: {}"</span>, queueName, message);
+        jmsTemplate.convertAndSend(queueName, message);
+    }
+
+    <span class="cmt">// NEW — publish to topic (broadcast to all subscribers)</span>
+    <span class="kw">public void</span> publishToTopic(<span class="typ">NotificationMessage</span> message) {
+        log.info(<span class="str">"📢 [TOPIC] Broadcasting to [{}]: {}"</span>, topicName, message);
+        jmsTemplate.setPubSubDomain(<span class="kw">true</span>);   <span class="cmt">// switch to topic mode for this send</span>
+        jmsTemplate.convertAndSend(topicName, message);
+        jmsTemplate.setPubSubDomain(<span class="kw">false</span>);  <span class="cmt">// reset back to queue mode</span>
+    }
+}</code></pre>
+
+  <div class="callout callout-info">
+    <div class="callout-label">Infrastructure Detail: Why Toggle pubSubDomain?</div>
+    <p>The <code>JmsTemplate</code> bean is shared across your entire application. By default it's in <strong>queue mode</strong> (<code>pubSubDomain=false</code>). When you want to send to a topic, you temporarily flip the flag. In production, a cleaner approach is to create two separate <code>JmsTemplate</code> beans — one for queues, one for topics. We keep it simple here to focus on the concept.</p>
+  </div>
+
+  <h3>Step 4: Create Topic Subscribers</h3>
+
+  <p>Create three independent subscriber services. Each simulates a different downstream system:</p>
+
+  <pre data-lang="java"><code><span class="cmt">// src/main/java/.../Service/EmailSubscriber.java</span>
+<span class="kw">package</span> com.learningPath.springProfileAmq.NotificationHub.Service;
+
+<span class="kw">import</span> org.slf4j.Logger;
+<span class="kw">import</span> org.slf4j.LoggerFactory;
+<span class="kw">import</span> org.springframework.jms.annotation.JmsListener;
+<span class="kw">import</span> org.springframework.stereotype.Service;
+<span class="kw">import</span> com.learningPath.springProfileAmq.NotificationHub.Model.NotificationMessage;
+
+<span class="ann">@Service</span>
+<span class="kw">public class</span> <span class="typ">EmailSubscriber</span> {
+
+    <span class="kw">private final</span> <span class="typ">Logger</span> log = LoggerFactory.getLogger(<span class="kw">this</span>.getClass());
+
+    <span class="ann">@JmsListener</span>(destination = <span class="str">"${app.topic.notification}"</span>,
+                 containerFactory = <span class="str">"topicFactory"</span>)    <span class="cmt">// ← uses our pub/sub factory!</span>
+    <span class="kw">public void</span> onNotification(<span class="typ">NotificationMessage</span> msg) {
+        log.info(<span class="str">"📧 [EMAIL] Sending email to {}: {}"</span>, msg.getRecipient(), msg.getContent());
+    }
+}</code></pre>
+
+  <pre data-lang="java"><code><span class="cmt">// src/main/java/.../Service/SmsSubscriber.java</span>
+<span class="kw">package</span> com.learningPath.springProfileAmq.NotificationHub.Service;
+
+<span class="kw">import</span> org.slf4j.Logger;
+<span class="kw">import</span> org.slf4j.LoggerFactory;
+<span class="kw">import</span> org.springframework.jms.annotation.JmsListener;
+<span class="kw">import</span> org.springframework.stereotype.Service;
+<span class="kw">import</span> com.learningPath.springProfileAmq.NotificationHub.Model.NotificationMessage;
+
+<span class="ann">@Service</span>
+<span class="kw">public class</span> <span class="typ">SmsSubscriber</span> {
+
+    <span class="kw">private final</span> <span class="typ">Logger</span> log = LoggerFactory.getLogger(<span class="kw">this</span>.getClass());
+
+    <span class="ann">@JmsListener</span>(destination = <span class="str">"${app.topic.notification}"</span>,
+                 containerFactory = <span class="str">"topicFactory"</span>)
+    <span class="kw">public void</span> onNotification(<span class="typ">NotificationMessage</span> msg) {
+        log.info(<span class="str">"📱 [SMS] Sending SMS to {}: {}"</span>, msg.getRecipient(), msg.getContent());
+    }
+}</code></pre>
+
+  <pre data-lang="java"><code><span class="cmt">// src/main/java/.../Service/AuditSubscriber.java</span>
+<span class="kw">package</span> com.learningPath.springProfileAmq.NotificationHub.Service;
+
+<span class="kw">import</span> org.slf4j.Logger;
+<span class="kw">import</span> org.slf4j.LoggerFactory;
+<span class="kw">import</span> org.springframework.jms.annotation.JmsListener;
+<span class="kw">import</span> org.springframework.stereotype.Service;
+<span class="kw">import</span> com.learningPath.springProfileAmq.NotificationHub.Model.NotificationMessage;
+
+<span class="ann">@Service</span>
+<span class="kw">public class</span> <span class="typ">AuditSubscriber</span> {
+
+    <span class="kw">private final</span> <span class="typ">Logger</span> log = LoggerFactory.getLogger(<span class="kw">this</span>.getClass());
+
+    <span class="ann">@JmsListener</span>(destination = <span class="str">"${app.topic.notification}"</span>,
+                 containerFactory = <span class="str">"topicFactory"</span>)
+    <span class="kw">public void</span> onNotification(<span class="typ">NotificationMessage</span> msg) {
+        log.info(<span class="str">"📋 [AUDIT] Logged notification {} for {} at {}"</span>, 
+                 msg.getId(), msg.getRecipient(), msg.getTimestamp());
+    }
+}</code></pre>
+
+  <p><strong>Notice the key difference from your queue listener:</strong> each subscriber specifies <code>containerFactory = "topicFactory"</code>. This tells Spring to use the pub/sub factory we created.</p>
+
+  <h3>Step 5: Update NotificationController</h3>
+
+  <p>Add a new endpoint that publishes to the topic, alongside your existing queue endpoint:</p>
+
+  <pre data-lang="java"><code><span class="cmt">// src/main/java/.../Controller/NotificationController.java</span>
+<span class="kw">package</span> com.learningPath.springProfileAmq.NotificationHub.Controller;
+
+<span class="kw">import</span> java.util.UUID;
+<span class="kw">import</span> org.slf4j.Logger;
+<span class="kw">import</span> org.slf4j.LoggerFactory;
+<span class="kw">import</span> org.springframework.http.ResponseEntity;
+<span class="kw">import</span> org.springframework.web.bind.annotation.*;
+<span class="kw">import</span> com.learningPath.springProfileAmq.NotificationHub.Model.NotificationMessage;
+<span class="kw">import</span> com.learningPath.springProfileAmq.NotificationHub.Service.NotificationSender;
+
+<span class="ann">@RestController</span>
+<span class="ann">@RequestMapping</span>(<span class="str">"/app"</span>)
+<span class="kw">public class</span> <span class="typ">NotificationController</span> {
+
+    <span class="kw">private final</span> <span class="typ">Logger</span> log = LoggerFactory.getLogger(<span class="kw">this</span>.getClass());
+    <span class="kw">private final</span> <span class="typ">NotificationSender</span> sender;
+
+    <span class="kw">public</span> <span class="typ">NotificationController</span>(<span class="typ">NotificationSender</span> sender) {
+        <span class="kw">this</span>.sender = sender;
+    }
+
+    <span class="cmt">// Existing queue endpoint (from Lesson 05)</span>
+    <span class="ann">@PostMapping</span>(<span class="str">"/notify"</span>)
+    <span class="kw">public</span> <span class="typ">ResponseEntity</span>&lt;<span class="typ">NotificationMessage</span>&gt; notify(
+            <span class="ann">@RequestParam</span> <span class="typ">String</span> recipient, 
+            <span class="ann">@RequestParam</span> <span class="typ">String</span> content) {
+
+        <span class="typ">String</span> alertId = <span class="str">"ALT-"</span> + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        <span class="typ">NotificationMessage</span> msg = <span class="kw">new</span> <span class="typ">NotificationMessage</span>(alertId, recipient, content, <span class="str">"DISPATCHED"</span>);
+        sender.sendToQueue(msg);
+        <span class="kw">return</span> ResponseEntity.ok(msg);
+    }
+
+    <span class="cmt">// NEW — broadcast to all subscribers via topic</span>
+    <span class="ann">@PostMapping</span>(<span class="str">"/broadcast"</span>)
+    <span class="kw">public</span> <span class="typ">ResponseEntity</span>&lt;<span class="typ">NotificationMessage</span>&gt; broadcast(
+            <span class="ann">@RequestParam</span> <span class="typ">String</span> recipient,
+            <span class="ann">@RequestParam</span> <span class="typ">String</span> content) {
+
+        <span class="typ">String</span> alertId = <span class="str">"BRC-"</span> + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        <span class="typ">NotificationMessage</span> msg = <span class="kw">new</span> <span class="typ">NotificationMessage</span>(alertId, recipient, content, <span class="str">"BROADCAST"</span>);
+        sender.publishToTopic(msg);
+        <span class="kw">return</span> ResponseEntity.ok(msg);
+    }
+}</code></pre>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 5: Run &amp; Verify</h2>
+
+  <h3>Start the Application</h3>
+  <pre data-lang="bash"><code>./mvnw spring-boot:run -Dspring-boot.run.profiles=dev</code></pre>
+
+  <h3>Test Queue (Point-to-Point — one consumer)</h3>
+  <pre data-lang="bash"><code>curl -X POST "http://localhost:8081/app/notify?recipient=koushal@test.com&content=Queue+Test"</code></pre>
+  <p>You should see <strong>one</strong> consumer receive the message (your existing <code>NotificationListner</code>).</p>
+
+  <h3>Test Topic (Broadcast — all three subscribers)</h3>
+  <pre data-lang="bash"><code>curl -X POST "http://localhost:8081/app/broadcast?recipient=koushal@test.com&content=Broadcast+Test"</code></pre>
+  <p>You should see <strong>three lines</strong> in the console — ALL subscribers received the SAME message:</p>
+  <pre data-lang="bash"><code>📢 [TOPIC] Broadcasting to [notification.events]: NotificationMessage{...}
+📧 [EMAIL] Sending email to koushal@test.com: Broadcast Test
+📱 [SMS] Sending SMS to koushal@test.com: Broadcast Test
+📋 [AUDIT] Logged notification BRC-A1B2C3D4 for koushal@test.com at 2026-07-29T17:10:...</code></pre>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 6: Experiments (Desirable Difficulty)</h2>
+
+  <div class="card">
+    <h3>🧪 Experiment A: Remove One Subscriber — Others Still Work</h3>
+    <ol>
+      <li>Comment out the <code>@Service</code> annotation on <code>SmsSubscriber.java</code></li>
+      <li>Restart the app and send a broadcast</li>
+      <li>Notice: Email and Audit still receive the message — SMS is simply gone</li>
+      <li><strong>This proves:</strong> Subscribers are fully independent. Adding or removing one has ZERO impact on others. This is the power of event-driven decoupling.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h3>🧪 Experiment B: Forget the containerFactory — Watch It Break</h3>
+    <ol>
+      <li>In <code>EmailSubscriber.java</code>, remove <code>containerFactory = "topicFactory"</code> from the <code>@JmsListener</code> annotation</li>
+      <li>Restart and send a broadcast. Only ONE of your three subscribers gets each message (random round-robin)</li>
+      <li>Put it back and restart — all three get every message again</li>
+      <li><strong>This proves:</strong> Without <code>containerFactory = "topicFactory"</code>, Spring treats the destination as a queue, not a topic</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h3>🧪 Experiment C: Stop the App, Send a Message, Restart</h3>
+    <ol>
+      <li>Stop the Notification Hub application</li>
+      <li>Use the Artemis Web Console (port 8161) to manually send a message to the topic <code>notification.events</code></li>
+      <li>Restart the application</li>
+      <li>Did your subscribers receive the message? <strong>No!</strong> Topic messages are only delivered to <strong>active</strong> subscribers</li>
+      <li>Now try the same with the queue <code>notification.queue</code> — the queue message IS delivered after restart!</li>
+      <li><strong>This proves:</strong> Topics require active subscribers. Queues persist messages. (Durable subscriptions fix this — Lesson 12)</li>
+    </ol>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Knowledge Check</h2>
+
+  <div class="quiz" data-quiz="q1">
+    <p class="quiz-question">You publish one message to a Topic with 5 active subscribers. How many copies of the message are delivered?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="In pub/sub, EVERY active subscriber gets its own independent copy of every message. 5 subscribers = 5 deliveries.">5 — every active subscriber receives its own copy of the message independently</li>
+      <li>1 — the broker round-robins and only one subscriber gets each message</li>
+      <li>It depends on the broker load — Artemis decides based on memory pressure</li>
+      <li>0 — topics only store messages, subscribers must manually poll for them</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <div class="quiz" data-quiz="q2">
+    <p class="quiz-question">What happens if you publish to a Topic and NO subscribers are currently active?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="Without durable subscriptions, topic messages are fire-and-forget. No active subscriber = message is discarded. Queues retain messages; topics don't (by default).">The message is discarded — topics only deliver to active subscribers (unless using durable subscriptions)</li>
+      <li>The broker stores the message indefinitely until a subscriber eventually connects and consumes it</li>
+      <li>The message is automatically redirected to a fallback queue named "undelivered"</li>
+      <li>Artemis throws a NoSubscriberException and the producer's convertAndSend() call fails</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <div class="quiz" data-quiz="q3">
+    <p class="quiz-question">Why do topic <code>@JmsListener</code> methods need <code>containerFactory = "topicFactory"</code>?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="The default factory has pubSubDomain=false (queue mode). Our topicFactory has pubSubDomain=true. Without it, the listener subscribes as a competing queue consumer, not a broadcast subscriber.">Because the default factory uses queue mode (pubSubDomain=false). The topicFactory sets pubSubDomain=true to enable pub/sub behavior</li>
+      <li>Because topic listeners require a different TCP port and the topicFactory configures port 61617</li>
+      <li>Because Spring Boot cannot auto-detect whether a destination name refers to a queue or topic</li>
+      <li>Because topics use a different serialization format than queues and need a separate MessageConverter</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <div class="quiz" data-quiz="q4">
+    <p class="quiz-question">In enterprise architecture, when do you choose a Queue vs a Topic?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="Queues for commands: 'do this work' (one handler). Topics for events: 'this happened' (many interested parties). This is the CQRS/event-driven distinction.">Queue for commands (one consumer processes the task); Topic for events (multiple services react to something that happened)</li>
+      <li>Queue for fast messages; Topic for slow messages that need more processing time</li>
+      <li>Queue for small payloads under 1KB; Topic for large payloads over 1KB</li>
+      <li>Queue for internal services; Topic for external third-party integrations only</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Your Checkpoint</h2>
+
+  <ul>
+    <li>✅ Explain Queue (point-to-point, competing consumers) vs Topic (pub/sub, fan-out broadcast)</li>
+    <li>✅ Configure a dedicated <code>topicFactory</code> with <code>pubSubDomain=true</code></li>
+    <li>✅ Build multiple independent subscribers that each receive every message</li>
+    <li>✅ Know that topic messages are lost without active subscribers (vs queues which persist)</li>
+    <li>✅ Articulate the "Queues for commands, Topics for events" design principle</li>
+  </ul>
+
+  <!-- ============================================================ -->
+
+  <h2>What's Next</h2>
+
+  <p>In <strong>Lesson 07: Building the Order Processing System</strong>, you'll start <strong>Project 2</strong> — a multi-service event-driven architecture. An Order Service publishes events to a topic, and three independent microservices (Inventory, Payment, Notification) react to those events. This is the real architecture pattern used at S&amp;P Global MI.</p>
+
+  <!-- ============================================================ -->
+
+  <div class="teacher-prompt">
+    <strong>💬 Questions?</strong><br>
+    Not sure when to use a Queue vs Topic? Confused about durable subscribers? Ask me — this Queue/Topic distinction is one of the top 3 JMS interview questions.
+    <br><br>
+    When you've built and tested the topic subscribers, move on to <strong>Lesson 07</strong>.
+  </div>
+
+  <div class="lesson-nav">
+    <a href="0005-json-messages-and-messageconverter.html">← Lesson 05: JSON Messages</a>
+    <a href="0007-building-the-order-processing-system.html">Next: Lesson 07 — Order Processing System →</a>
+  </div>
+
+  <script src="../assets/quiz.js"></script>
+
+</body>
+</html>

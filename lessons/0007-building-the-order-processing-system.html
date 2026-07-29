@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 07 — Building the Order Processing System</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+  <div class="lesson-header">
+    <span class="lesson-badge badge-intermediate">Day 3</span>
+    <h1>Building the Order Processing System</h1>
+    <p>Project 2 — a multi-service event-driven architecture using queues and topics together</p>
+    <div class="lesson-meta">
+      <span>📅 Lesson 07 of 14</span>
+      <span>⏱ 60 min (read + build)</span>
+      <span>🎯 Project 2: Order Processing System (new project)</span>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>What You'll Build</h2>
+
+  <p>This is the second major project in your learning path. You will build an <strong>Order Processing System</strong> that demonstrates real enterprise event-driven architecture — the exact pattern used at financial companies like S&amp;P Global MI for processing trade orders, credit ratings, and market data updates.</p>
+
+  <ul>
+    <li>A REST API that accepts new orders</li>
+    <li>An <strong>Order Placement Queue</strong> (point-to-point) for reliable order processing</li>
+    <li>An <strong>Order Events Topic</strong> (pub/sub) that broadcasts events to independent services</li>
+    <li>Three downstream services: <strong>Inventory</strong>, <strong>Payment</strong>, and <strong>Notification</strong></li>
+    <li>Each service reacts independently — adding or removing a service requires ZERO code changes in the Order Service</li>
+  </ul>
+
+  <div class="callout callout-success">
+    <div class="callout-label">Why This Architecture Matters</div>
+    <p>This project combines everything from Lessons 01–06: Spring Boot setup, broker connection, Spring Profiles, JSON message conversion, queues, and topics — into one coherent system. An interviewer at S&amp;P Global MI will expect you to diagram and explain this exact pattern.</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 1: The Architecture</h2>
+
+  <div class="diagram">
+    <pre><code>
+  ORDER PROCESSING SYSTEM — FULL ARCHITECTURE
+  ════════════════════════════════════════════════════════════════
+
+  [Client / cURL]
+       │  POST /api/orders
+       ▼
+  ┌──────────────────────┐
+  │   OrderController    │  REST endpoint — accepts JSON order
+  │   (Spring MVC)       │
+  └──────────┬───────────┘
+             │ sends OrderEvent POJO
+             ▼
+  ┌──────────────────────┐
+  │   OrderProducer      │  Publishes to BOTH queue and topic
+  │   (JmsTemplate)      │
+  └──────┬───────┬───────┘
+         │       │
+    Queue│       │Topic
+         │       │
+         ▼       ▼
+  ┌──────────┐ ┌─────────────────┐
+  │ order.   │ │  order.events   │  (multicast topic)
+  │ process  │ │                 │
+  │ .queue   │ │                 │
+  └────┬─────┘ └──┬──────┬──────┘
+       │          │      │      │
+       ▼          ▼      ▼      ▼
+  ┌─────────┐ ┌───────┐ ┌───────┐ ┌────────────┐
+  │ Order   │ │Invent-│ │Payment│ │Notification│
+  │Processor│ │ ory   │ │Service│ │  Service   │
+  │(queue)  │ │Service│ │       │ │            │
+  └─────────┘ └───────┘ └───────┘ └────────────┘
+     ↑ one       ↑ all three get every event
+     consumer    └─ independent subscribers
+    </code></pre>
+  </div>
+
+  <h3>Why Both Queue AND Topic?</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Destination</th>
+        <th>Type</th>
+        <th>Purpose</th>
+        <th>Consumer</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>order.process.queue</code></td>
+        <td>Queue</td>
+        <td>Reliable order processing — must be handled exactly once</td>
+        <td>OrderProcessor (single consumer)</td>
+      </tr>
+      <tr>
+        <td><code>order.events</code></td>
+        <td>Topic</td>
+        <td>Broadcast "order placed" event to any interested service</td>
+        <td>Inventory + Payment + Notification (all get it)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout callout-danger">
+    <div class="callout-label">Interview Insight</div>
+    <p>"We use a <strong>queue for the command</strong> ('process this order' — must happen once, reliably) and a <strong>topic for the event</strong> ('an order was placed' — whoever cares can subscribe). The order processor is the queue consumer. Downstream services like inventory, payment, and notifications subscribe to the topic independently. Adding a new subscriber (e.g., analytics) requires zero changes to the order service."</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 2: Create the Project</h2>
+
+  <h3>Step 1: New Spring Boot Project</h3>
+
+  <p>Create a new Spring Boot project. You can use <a href="https://start.spring.io">start.spring.io</a> or your IDE. Use these settings:</p>
+
+  <table>
+    <thead>
+      <tr><th>Setting</th><th>Value</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Group</td><td><code>com.learningPath</code></td></tr>
+      <tr><td>Artifact</td><td><code>OrderProcessingSystem</code></td></tr>
+      <tr><td>Java</td><td>17</td></tr>
+      <tr><td>Spring Boot</td><td>3.x (latest)</td></tr>
+      <tr><td>Dependencies</td><td><code>spring-boot-starter-artemis</code>, <code>spring-boot-starter-web</code>, <code>spring-boot-starter-actuator</code></td></tr>
+    </tbody>
+  </table>
+
+  <p>Place the project in: <code>Projects/Project 2 - Order Processing System/</code></p>
+
+  <h3>Step 2: Project Structure</h3>
+
+  <pre data-lang="bash"><code>src/main/java/com/learningPath/OrderProcessingSystem/
+├── Config/
+│   └── JmsConfig.java                 <span class="cmt"># Queue + Topic factories, Jackson converter</span>
+├── Controller/
+│   └── OrderController.java           <span class="cmt"># REST endpoint: POST /api/orders</span>
+├── Model/
+│   ├── OrderRequest.java              <span class="cmt"># HTTP request body (from client)</span>
+│   └── OrderEvent.java                <span class="cmt"># JMS message POJO (sent to broker)</span>
+├── Producer/
+│   └── OrderProducer.java             <span class="cmt"># Sends to queue + publishes to topic</span>
+├── Consumer/
+│   ├── OrderProcessor.java            <span class="cmt"># Queue consumer — processes the order</span>
+│   ├── InventorySubscriber.java       <span class="cmt"># Topic subscriber — updates stock</span>
+│   ├── PaymentSubscriber.java         <span class="cmt"># Topic subscriber — initiates payment</span>
+│   └── NotificationSubscriber.java    <span class="cmt"># Topic subscriber — sends confirmation</span>
+└── OrderProcessingSystemApplication.java</code></pre>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 3: Build the Components</h2>
+
+  <h3>Step 3: Configuration Files</h3>
+
+  <pre data-lang="yaml"><code><span class="cmt"># src/main/resources/application.yml</span>
+spring:
+  application:
+    name: OrderProcessingSystem
+  profiles:
+    active: dev
+
+app:
+  queue:
+    order-process: order.process.queue       <span class="cmt"># command: "process this order"</span>
+  topic:
+    order-events: order.events               <span class="cmt"># event: "an order was placed"</span></code></pre>
+
+  <pre data-lang="yaml"><code><span class="cmt"># src/main/resources/application-dev.yml</span>
+spring:
+  artemis:
+    mode: native
+    broker-url: tcp://localhost:61616
+    user: admin
+    password: admin
+
+server:
+  port: 8082                                  <span class="cmt"># different port from NotificationHub!</span>
+
+logging:
+  level:
+    com.learningPath: DEBUG</code></pre>
+
+  <h3>Step 4: Domain Models</h3>
+
+  <pre data-lang="java"><code><span class="cmt">// Model/OrderRequest.java — what the HTTP client sends</span>
+<span class="kw">package</span> com.learningPath.OrderProcessingSystem.Model;
+
+<span class="kw">public class</span> <span class="typ">OrderRequest</span> {
+
+    <span class="kw">private</span> <span class="typ">String</span> customerId;
+    <span class="kw">private</span> <span class="typ">String</span> productName;
+    <span class="kw">private int</span> quantity;
+    <span class="kw">private double</span> pricePerUnit;
+
+    <span class="cmt">// Default constructor (required for Jackson HTTP deserialization)</span>
+    <span class="kw">public</span> <span class="typ">OrderRequest</span>() {}
+
+    <span class="cmt">// Getters and Setters</span>
+    <span class="kw">public</span> <span class="typ">String</span> getCustomerId() { <span class="kw">return</span> customerId; }
+    <span class="kw">public void</span> setCustomerId(<span class="typ">String</span> customerId) { <span class="kw">this</span>.customerId = customerId; }
+
+    <span class="kw">public</span> <span class="typ">String</span> getProductName() { <span class="kw">return</span> productName; }
+    <span class="kw">public void</span> setProductName(<span class="typ">String</span> productName) { <span class="kw">this</span>.productName = productName; }
+
+    <span class="kw">public int</span> getQuantity() { <span class="kw">return</span> quantity; }
+    <span class="kw">public void</span> setQuantity(<span class="kw">int</span> quantity) { <span class="kw">this</span>.quantity = quantity; }
+
+    <span class="kw">public double</span> getPricePerUnit() { <span class="kw">return</span> pricePerUnit; }
+    <span class="kw">public void</span> setPricePerUnit(<span class="kw">double</span> pricePerUnit) { <span class="kw">this</span>.pricePerUnit = pricePerUnit; }
+}</code></pre>
+
+  <pre data-lang="java"><code><span class="cmt">// Model/OrderEvent.java — what travels through JMS</span>
+<span class="kw">package</span> com.learningPath.OrderProcessingSystem.Model;
+
+<span class="kw">import</span> java.time.LocalDateTime;
+
+<span class="kw">public class</span> <span class="typ">OrderEvent</span> {
+
+    <span class="kw">private</span> <span class="typ">String</span> orderId;
+    <span class="kw">private</span> <span class="typ">String</span> customerId;
+    <span class="kw">private</span> <span class="typ">String</span> productName;
+    <span class="kw">private int</span> quantity;
+    <span class="kw">private double</span> totalAmount;
+    <span class="kw">private</span> <span class="typ">String</span> status;
+    <span class="kw">private</span> <span class="typ">String</span> timestamp;
+
+    <span class="cmt">// Default constructor (required for Jackson JMS deserialization)</span>
+    <span class="kw">public</span> <span class="typ">OrderEvent</span>() {}
+
+    <span class="kw">public</span> <span class="typ">OrderEvent</span>(<span class="typ">String</span> orderId, <span class="typ">String</span> customerId, <span class="typ">String</span> productName,
+                      <span class="kw">int</span> quantity, <span class="kw">double</span> totalAmount, <span class="typ">String</span> status) {
+        <span class="kw">this</span>.orderId = orderId;
+        <span class="kw">this</span>.customerId = customerId;
+        <span class="kw">this</span>.productName = productName;
+        <span class="kw">this</span>.quantity = quantity;
+        <span class="kw">this</span>.totalAmount = totalAmount;
+        <span class="kw">this</span>.status = status;
+        <span class="kw">this</span>.timestamp = LocalDateTime.now().toString();
+    }
+
+    <span class="cmt">// --- Getters and Setters ---</span>
+    <span class="kw">public</span> <span class="typ">String</span> getOrderId() { <span class="kw">return</span> orderId; }
+    <span class="kw">public void</span> setOrderId(<span class="typ">String</span> orderId) { <span class="kw">this</span>.orderId = orderId; }
+
+    <span class="kw">public</span> <span class="typ">String</span> getCustomerId() { <span class="kw">return</span> customerId; }
+    <span class="kw">public void</span> setCustomerId(<span class="typ">String</span> customerId) { <span class="kw">this</span>.customerId = customerId; }
+
+    <span class="kw">public</span> <span class="typ">String</span> getProductName() { <span class="kw">return</span> productName; }
+    <span class="kw">public void</span> setProductName(<span class="typ">String</span> productName) { <span class="kw">this</span>.productName = productName; }
+
+    <span class="kw">public int</span> getQuantity() { <span class="kw">return</span> quantity; }
+    <span class="kw">public void</span> setQuantity(<span class="kw">int</span> quantity) { <span class="kw">this</span>.quantity = quantity; }
+
+    <span class="kw">public double</span> getTotalAmount() { <span class="kw">return</span> totalAmount; }
+    <span class="kw">public void</span> setTotalAmount(<span class="kw">double</span> totalAmount) { <span class="kw">this</span>.totalAmount = totalAmount; }
+
+    <span class="kw">public</span> <span class="typ">String</span> getStatus() { <span class="kw">return</span> status; }
+    <span class="kw">public void</span> setStatus(<span class="typ">String</span> status) { <span class="kw">this</span>.status = status; }
+
+    <span class="kw">public</span> <span class="typ">String</span> getTimestamp() { <span class="kw">return</span> timestamp; }
+    <span class="kw">public void</span> setTimestamp(<span class="typ">String</span> timestamp) { <span class="kw">this</span>.timestamp = timestamp; }
+
+    <span class="ann">@Override</span>
+    <span class="kw">public</span> <span class="typ">String</span> toString() {
+        <span class="kw">return</span> <span class="str">"OrderEvent{orderId='"</span> + orderId + <span class="str">"', customer='"</span> + customerId +
+               <span class="str">"', product='"</span> + productName + <span class="str">"', qty="</span> + quantity +
+               <span class="str">", total=$"</span> + String.format(<span class="str">"%.2f"</span>, totalAmount) + <span class="str">"}"</span>;
+    }
+}</code></pre>
+
+  <div class="callout callout-info">
+    <div class="callout-label">Design Decision: Two Separate Models</div>
+    <p>We deliberately separate <code>OrderRequest</code> (HTTP input) from <code>OrderEvent</code> (JMS payload). In enterprise systems, the API contract and the internal event contract often differ — the event adds computed fields (like <code>totalAmount</code>, <code>orderId</code>, <code>timestamp</code>) that the client didn't provide. This is a standard pattern in Domain-Driven Design (DDD).</p>
+  </div>
+
+  <h3>Step 5: JMS Configuration</h3>
+
+  <pre data-lang="java"><code><span class="cmt">// Config/JmsConfig.java</span>
+<span class="kw">package</span> com.learningPath.OrderProcessingSystem.Config;
+
+<span class="kw">import</span> jakarta.jms.ConnectionFactory;
+<span class="kw">import</span> org.springframework.context.annotation.Bean;
+<span class="kw">import</span> org.springframework.context.annotation.Configuration;
+<span class="kw">import</span> org.springframework.jms.config.DefaultJmsListenerContainerFactory;
+<span class="kw">import</span> org.springframework.jms.config.JmsListenerContainerFactory;
+<span class="kw">import</span> org.springframework.jms.support.converter.MappingJackson2MessageConverter;
+<span class="kw">import</span> org.springframework.jms.support.converter.MessageConverter;
+<span class="kw">import</span> org.springframework.jms.support.converter.MessageType;
+
+<span class="ann">@Configuration</span>
+<span class="kw">public class</span> <span class="typ">JmsConfig</span> {
+
+    <span class="ann">@Bean</span>
+    <span class="kw">public</span> <span class="typ">MessageConverter</span> jacksonJmsMessageConverter() {
+        <span class="typ">MappingJackson2MessageConverter</span> converter = <span class="kw">new</span> <span class="typ">MappingJackson2MessageConverter</span>();
+        converter.setTargetType(MessageType.TEXT);
+        converter.setTypeIdPropertyName(<span class="str">"_type"</span>);
+        <span class="kw">return</span> converter;
+    }
+
+    <span class="ann">@Bean</span>
+    <span class="kw">public</span> <span class="typ">JmsListenerContainerFactory</span>&lt;?&gt; topicFactory(
+            <span class="typ">ConnectionFactory</span> connectionFactory,
+            <span class="typ">MessageConverter</span> messageConverter) {
+        <span class="typ">DefaultJmsListenerContainerFactory</span> factory = <span class="kw">new</span> <span class="typ">DefaultJmsListenerContainerFactory</span>();
+        factory.setConnectionFactory(connectionFactory);
+        factory.setMessageConverter(messageConverter);
+        factory.setPubSubDomain(<span class="kw">true</span>);
+        <span class="kw">return</span> factory;
+    }
+}</code></pre>
+
+  <h3>Step 6: Order Producer</h3>
+
+  <pre data-lang="java"><code><span class="cmt">// Producer/OrderProducer.java</span>
+<span class="kw">package</span> com.learningPath.OrderProcessingSystem.Producer;
+
+<span class="kw">import</span> org.slf4j.Logger;
+<span class="kw">import</span> org.slf4j.LoggerFactory;
+<span class="kw">import</span> org.springframework.beans.factory.annotation.Value;
+<span class="kw">import</span> org.springframework.jms.core.JmsTemplate;
+<span class="kw">import</span> org.springframework.stereotype.Service;
+<span class="kw">import</span> com.learningPath.OrderProcessingSystem.Model.OrderEvent;
+
+<span class="ann">@Service</span>
+<span class="kw">public class</span> <span class="typ">OrderProducer</span> {
+
+    <span class="kw">private final</span> <span class="typ">Logger</span> log = LoggerFactory.getLogger(<span class="kw">this</span>.getClass());
+    <span class="kw">private final</span> <span class="typ">JmsTemplate</span> jmsTemplate;
+
+    <span class="ann">@Value</span>(<span class="str">"${app.queue.order-process}"</span>)
+    <span class="kw">private</span> <span class="typ">String</span> orderQueue;
+
+    <span class="ann">@Value</span>(<span class="str">"${app.topic.order-events}"</span>)
+    <span class="kw">private</span> <span class="typ">String</span> orderTopic;
+
+    <span class="kw">public</span> <span class="typ">OrderProducer</span>(<span class="typ">JmsTemplate</span> jmsTemplate) {
+        <span class="kw">this</span>.jmsTemplate = jmsTemplate;
+    }
+
+    <span class="kw">public void</span> placeOrder(<span class="typ">OrderEvent</span> event) {
+        <span class="cmt">// 1. Send command to queue (reliable, exactly-once processing)</span>
+        log.info(<span class="str">"📦 [QUEUE] Sending order {} to processing queue"</span>, event.getOrderId());
+        jmsTemplate.convertAndSend(orderQueue, event);
+
+        <span class="cmt">// 2. Broadcast event to topic (fan-out to all subscribers)</span>
+        log.info(<span class="str">"📢 [TOPIC] Broadcasting order {} event to all subscribers"</span>, event.getOrderId());
+        jmsTemplate.setPubSubDomain(<span class="kw">true</span>);
+        jmsTemplate.convertAndSend(orderTopic, event);
+        jmsTemplate.setPubSubDomain(<span class="kw">false</span>);
+    }
+}</code></pre>
+
+  <h3>Step 7: Order Controller (REST API)</h3>
+
+  <pre data-lang="java"><code><span class="cmt">// Controller/OrderController.java</span>
+<span class="kw">package</span> com.learningPath.OrderProcessingSystem.Controller;
+
+<span class="kw">import</span> java.util.UUID;
+<span class="kw">import</span> org.slf4j.Logger;
+<span class="kw">import</span> org.slf4j.LoggerFactory;
+<span class="kw">import</span> org.springframework.http.ResponseEntity;
+<span class="kw">import</span> org.springframework.web.bind.annotation.*;
+<span class="kw">import</span> com.learningPath.OrderProcessingSystem.Model.OrderRequest;
+<span class="kw">import</span> com.learningPath.OrderProcessingSystem.Model.OrderEvent;
+<span class="kw">import</span> com.learningPath.OrderProcessingSystem.Producer.OrderProducer;
+
+<span class="ann">@RestController</span>
+<span class="ann">@RequestMapping</span>(<span class="str">"/api/orders"</span>)
+<span class="kw">public class</span> <span class="typ">OrderController</span> {
+
+    <span class="kw">private final</span> <span class="typ">Logger</span> log = LoggerFactory.getLogger(<span class="kw">this</span>.getClass());
+    <span class="kw">private final</span> <span class="typ">OrderProducer</span> producer;
+
+    <span class="kw">public</span> <span class="typ">OrderController</span>(<span class="typ">OrderProducer</span> producer) {
+        <span class="kw">this</span>.producer = producer;
+    }
+
+    <span class="ann">@PostMapping</span>
+    <span class="kw">public</span> <span class="typ">ResponseEntity</span>&lt;<span class="typ">OrderEvent</span>&gt; createOrder(<span class="ann">@RequestBody</span> <span class="typ">OrderRequest</span> request) {
+        log.info(<span class="str">"🛒 Received order from customer: {}"</span>, request.getCustomerId());
+
+        <span class="cmt">// Transform HTTP request into a domain event</span>
+        <span class="typ">String</span> orderId = <span class="str">"ORD-"</span> + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        <span class="kw">double</span> total = request.getQuantity() * request.getPricePerUnit();
+
+        <span class="typ">OrderEvent</span> event = <span class="kw">new</span> <span class="typ">OrderEvent</span>(
+            orderId,
+            request.getCustomerId(),
+            request.getProductName(),
+            request.getQuantity(),
+            total,
+            <span class="str">"PLACED"</span>
+        );
+
+        producer.placeOrder(event);
+
+        <span class="kw">return</span> ResponseEntity.ok(event);
+    }
+}</code></pre>
+
+  <h3>Step 8: Queue Consumer — Order Processor</h3>
+
+  <pre data-lang="java"><code><span class="cmt">// Consumer/OrderProcessor.java</span>
+<span class="kw">package</span> com.learningPath.OrderProcessingSystem.Consumer;
+
+<span class="kw">import</span> org.slf4j.Logger;
+<span class="kw">import</span> org.slf4j.LoggerFactory;
+<span class="kw">import</span> org.springframework.jms.annotation.JmsListener;
+<span class="kw">import</span> org.springframework.stereotype.Service;
+<span class="kw">import</span> com.learningPath.OrderProcessingSystem.Model.OrderEvent;
+
+<span class="ann">@Service</span>
+<span class="kw">public class</span> <span class="typ">OrderProcessor</span> {
+
+    <span class="kw">private final</span> <span class="typ">Logger</span> log = LoggerFactory.getLogger(<span class="kw">this</span>.getClass());
+
+    <span class="ann">@JmsListener</span>(destination = <span class="str">"${app.queue.order-process}"</span>)
+    <span class="kw">public void</span> processOrder(<span class="typ">OrderEvent</span> event) {
+        log.info(<span class="str">"⚙️  [ORDER PROCESSOR] Processing order {}"</span>, event.getOrderId());
+        log.info(<span class="str">"   ├─ Customer:  {}"</span>, event.getCustomerId());
+        log.info(<span class="str">"   ├─ Product:   {} × {}"</span>, event.getProductName(), event.getQuantity());
+        log.info(<span class="str">"   ├─ Total:     ${}"</span>, String.format(<span class="str">"%.2f"</span>, event.getTotalAmount()));
+        log.info(<span class="str">"   └─ Status:    PROCESSING → CONFIRMED"</span>);
+
+        <span class="cmt">// Simulate processing delay</span>
+        <span class="kw">try</span> { Thread.sleep(500); } <span class="kw">catch</span> (InterruptedException e) { Thread.currentThread().interrupt(); }
+
+        log.info(<span class="str">"✅ [ORDER PROCESSOR] Order {} confirmed!"</span>, event.getOrderId());
+    }
+}</code></pre>
+
+  <h3>Step 9: Topic Subscribers</h3>
+
+  <pre data-lang="java"><code><span class="cmt">// Consumer/InventorySubscriber.java</span>
+<span class="kw">package</span> com.learningPath.OrderProcessingSystem.Consumer;
+
+<span class="kw">import</span> org.slf4j.Logger;
+<span class="kw">import</span> org.slf4j.LoggerFactory;
+<span class="kw">import</span> org.springframework.jms.annotation.JmsListener;
+<span class="kw">import</span> org.springframework.stereotype.Service;
+<span class="kw">import</span> com.learningPath.OrderProcessingSystem.Model.OrderEvent;
+
+<span class="ann">@Service</span>
+<span class="kw">public class</span> <span class="typ">InventorySubscriber</span> {
+
+    <span class="kw">private final</span> <span class="typ">Logger</span> log = LoggerFactory.getLogger(<span class="kw">this</span>.getClass());
+
+    <span class="ann">@JmsListener</span>(destination = <span class="str">"${app.topic.order-events}"</span>,
+                 containerFactory = <span class="str">"topicFactory"</span>)
+    <span class="kw">public void</span> onOrderPlaced(<span class="typ">OrderEvent</span> event) {
+        log.info(<span class="str">"📦 [INVENTORY] Reserving {} units of '{}' for order {}"</span>,
+                 event.getQuantity(), event.getProductName(), event.getOrderId());
+    }
+}</code></pre>
+
+  <pre data-lang="java"><code><span class="cmt">// Consumer/PaymentSubscriber.java</span>
+<span class="kw">package</span> com.learningPath.OrderProcessingSystem.Consumer;
+
+<span class="kw">import</span> org.slf4j.Logger;
+<span class="kw">import</span> org.slf4j.LoggerFactory;
+<span class="kw">import</span> org.springframework.jms.annotation.JmsListener;
+<span class="kw">import</span> org.springframework.stereotype.Service;
+<span class="kw">import</span> com.learningPath.OrderProcessingSystem.Model.OrderEvent;
+
+<span class="ann">@Service</span>
+<span class="kw">public class</span> <span class="typ">PaymentSubscriber</span> {
+
+    <span class="kw">private final</span> <span class="typ">Logger</span> log = LoggerFactory.getLogger(<span class="kw">this</span>.getClass());
+
+    <span class="ann">@JmsListener</span>(destination = <span class="str">"${app.topic.order-events}"</span>,
+                 containerFactory = <span class="str">"topicFactory"</span>)
+    <span class="kw">public void</span> onOrderPlaced(<span class="typ">OrderEvent</span> event) {
+        log.info(<span class="str">"💳 [PAYMENT] Initiating payment of ${} for customer {}"</span>,
+                 String.format(<span class="str">"%.2f"</span>, event.getTotalAmount()), event.getCustomerId());
+    }
+}</code></pre>
+
+  <pre data-lang="java"><code><span class="cmt">// Consumer/NotificationSubscriber.java</span>
+<span class="kw">package</span> com.learningPath.OrderProcessingSystem.Consumer;
+
+<span class="kw">import</span> org.slf4j.Logger;
+<span class="kw">import</span> org.slf4j.LoggerFactory;
+<span class="kw">import</span> org.springframework.jms.annotation.JmsListener;
+<span class="kw">import</span> org.springframework.stereotype.Service;
+<span class="kw">import</span> com.learningPath.OrderProcessingSystem.Model.OrderEvent;
+
+<span class="ann">@Service</span>
+<span class="kw">public class</span> <span class="typ">NotificationSubscriber</span> {
+
+    <span class="kw">private final</span> <span class="typ">Logger</span> log = LoggerFactory.getLogger(<span class="kw">this</span>.getClass());
+
+    <span class="ann">@JmsListener</span>(destination = <span class="str">"${app.topic.order-events}"</span>,
+                 containerFactory = <span class="str">"topicFactory"</span>)
+    <span class="kw">public void</span> onOrderPlaced(<span class="typ">OrderEvent</span> event) {
+        log.info(<span class="str">"🔔 [NOTIFICATION] Sending confirmation to customer {} for order {}"</span>,
+                 event.getCustomerId(), event.getOrderId());
+    }
+}</code></pre>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 4: Run &amp; Verify</h2>
+
+  <h3>Prerequisites</h3>
+  <ul>
+    <li>Docker Artemis broker running on port 61616 (from Lesson 02)</li>
+    <li>Notification Hub <strong>stopped</strong> (or running on a different port — we use 8082 for this project)</li>
+  </ul>
+
+  <h3>Start the Application</h3>
+  <pre data-lang="bash"><code>./mvnw spring-boot:run -Dspring-boot.run.profiles=dev</code></pre>
+
+  <h3>Place an Order</h3>
+  <pre data-lang="bash"><code>curl -X POST http://localhost:8082/api/orders \
+  -H "Content-Type: application/json" \
+  -d '{
+    "customerId": "CUST-1001",
+    "productName": "S&P 500 Index Fund",
+    "quantity": 10,
+    "pricePerUnit": 450.00
+  }'</code></pre>
+
+  <h3>Expected Console Output</h3>
+  <pre data-lang="bash"><code>🛒 Received order from customer: CUST-1001
+📦 [QUEUE] Sending order ORD-A1B2C3D4 to processing queue
+📢 [TOPIC] Broadcasting order ORD-A1B2C3D4 event to all subscribers
+
+⚙️  [ORDER PROCESSOR] Processing order ORD-A1B2C3D4
+   ├─ Customer:  CUST-1001
+   ├─ Product:   S&P 500 Index Fund × 10
+   ├─ Total:     $4500.00
+   └─ Status:    PROCESSING → CONFIRMED
+
+📦 [INVENTORY] Reserving 10 units of 'S&P 500 Index Fund' for order ORD-A1B2C3D4
+💳 [PAYMENT] Initiating payment of $4500.00 for customer CUST-1001
+🔔 [NOTIFICATION] Sending confirmation to customer CUST-1001 for order ORD-A1B2C3D4
+
+✅ [ORDER PROCESSOR] Order ORD-A1B2C3D4 confirmed!</code></pre>
+
+  <p><strong>Notice:</strong> The Order Processor (queue) runs once. All three topic subscribers each received the same event independently!</p>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 5: Experiments (Desirable Difficulty)</h2>
+
+  <div class="card">
+    <h3>🧪 Experiment A: Place 5 Orders Rapidly</h3>
+    <pre data-lang="bash"><code>for i in {1..5}; do
+  curl -s -X POST http://localhost:8082/api/orders \
+    -H "Content-Type: application/json" \
+    -d "{\"customerId\":\"CUST-$i\",\"productName\":\"Bond-$i\",\"quantity\":$i,\"pricePerUnit\":100.00}" &
+done
+wait</code></pre>
+    <p>Watch the console. All 5 orders are processed by the queue consumer (one at a time, in sequence). All 3 topic subscribers receive all 5 events. <strong>Count the log lines</strong>: 5 queue + (5 × 3) topic = 20 total consumer logs.</p>
+  </div>
+
+  <div class="card">
+    <h3>🧪 Experiment B: Add a Fourth Subscriber (Analytics)</h3>
+    <ol>
+      <li>Create <code>AnalyticsSubscriber.java</code> in the Consumer package</li>
+      <li>Add a <code>@JmsListener</code> with <code>containerFactory = "topicFactory"</code></li>
+      <li>Log: <code>"📊 [ANALYTICS] Recording order metrics for order {}"</code></li>
+      <li>Restart and place an order — now 4 topic subscribers fire!</li>
+      <li><strong>This proves:</strong> Adding a new subscriber requires ZERO changes to the producer or controller.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h3>🧪 Experiment C: Inspect Both Destinations in Web Console</h3>
+    <ol>
+      <li>Open http://localhost:8161 (admin/admin)</li>
+      <li>Navigate to Queues — find <code>order.process.queue</code> and check message count</li>
+      <li>Navigate to Addresses — find <code>order.events</code> and see it's a multicast address</li>
+      <li><strong>This proves:</strong> Artemis treats queues (anycast) and topics (multicast) as different address types.</li>
+    </ol>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>The Complete Flow Diagram</h2>
+
+  <div class="diagram">
+    <pre><code>
+  THE FULL ORDER EVENT FLOW
+  ═══════════════════════════════════════════════════════════════
+
+  Time →
+  ─────────────────────────────────────────────────────────────
+
+  t0: Client sends POST /api/orders with JSON body
+       │
+  t1:  ▼ OrderController transforms OrderRequest → OrderEvent
+       │  (adds orderId, totalAmount, timestamp)
+       │
+  t2:  ▼ OrderProducer.placeOrder()
+       ├── convertAndSend(queue, event)  →  order.process.queue
+       └── convertAndSend(topic, event)  →  order.events (multicast)
+       │
+  t3:  ▼ Artemis broker receives both messages
+       │
+  t4:  ├── Queue: OrderProcessor receives (ONE consumer)
+       │   └── Processes order, confirms it
+       │
+       ├── Topic: InventorySubscriber receives (ALL get it)
+       │   └── Reserves stock
+       │
+       ├── Topic: PaymentSubscriber receives
+       │   └── Initiates payment
+       │
+       └── Topic: NotificationSubscriber receives
+           └── Sends confirmation email
+
+  TOTAL: 1 queue delivery + 3 topic deliveries = 4 consumer executions
+    </code></pre>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Knowledge Check</h2>
+
+  <div class="quiz" data-quiz="q1">
+    <p class="quiz-question">Why does the Order Processing System use BOTH a queue AND a topic for the same order event?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="The queue handles the reliable command: 'process this order exactly once.' The topic broadcasts the event: 'an order was placed — react if you care.' Different delivery guarantees for different purposes.">The queue guarantees exactly-once processing (command: 'process this order'), while the topic broadcasts the event to all interested services (event: 'order was placed')</li>
+      <li>Using both is required by the JMS specification when sending messages larger than 1KB in size</li>
+      <li>The queue is for internal services and the topic is exclusively for external third-party consumers</li>
+      <li>Spring Boot requires both a queue and topic for the MappingJackson2MessageConverter to work correctly</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <div class="quiz" data-quiz="q2">
+    <p class="quiz-question">You want to add a fifth microservice (FraudDetectionService) that also needs to know about every order placed. What do you change?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="That's the entire power of pub/sub — new subscribers are added without touching the producer, controller, or any existing subscriber. Zero coupling.">Create a new FraudDetectionSubscriber class with @JmsListener on the same topic. No changes to the producer, controller, or other subscribers.</li>
+      <li>Modify the OrderProducer to add a fifth convertAndSend() call specifically for the fraud detection queue</li>
+      <li>Update the OrderController to accept a list of subscriber URLs and POST to each one directly via HTTP</li>
+      <li>Add a new queue for fraud detection and modify the JmsConfig to route messages to both the topic and this new queue</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <div class="quiz" data-quiz="q3">
+    <p class="quiz-question">Why do we separate <code>OrderRequest</code> (HTTP model) from <code>OrderEvent</code> (JMS model)?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="The API contract (what clients send) and the internal event contract (what flows through the system) are different concerns. The event includes computed fields like orderId and totalAmount that the client never provided.">Because the API input and the internal event have different shapes — the event includes computed fields (orderId, totalAmount, timestamp) that the client didn't send</li>
+      <li>Because Spring Boot cannot serialize the same class for both HTTP/JSON and JMS/JSON at the same time</li>
+      <li>Because the JMS specification forbids reusing the same Java class across REST and messaging boundaries</li>
+      <li>There's no real reason — it's just a convention. Using one class would work identically and be simpler</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Your Checkpoint</h2>
+
+  <ul>
+    <li>✅ Build a multi-service event-driven architecture from scratch</li>
+    <li>✅ Use queues for commands and topics for events in the same system</li>
+    <li>✅ Separate HTTP models from JMS event models (DDD pattern)</li>
+    <li>✅ Add new subscribers with zero changes to the producer</li>
+    <li>✅ Diagram the full order flow for an interview whiteboard question</li>
+  </ul>
+
+  <!-- ============================================================ -->
+
+  <h2>What's Next</h2>
+
+  <p>In <strong>Lesson 08: Dead Letter Queues &amp; Error Handling</strong>, you'll learn what happens when a consumer <em>fails</em> to process a message. What if the payment service throws an exception? Does the message disappear? Get retried? How many times? You'll configure DLQs (Dead Letter Queues) to catch poison messages and build retry strategies.</p>
+
+  <!-- ============================================================ -->
+
+  <div class="teacher-prompt">
+    <strong>💬 Build Challenge</strong><br>
+    Try running both the Notification Hub (port 8081) and Order Processing System (port 8082) simultaneously against the same Artemis broker. They share the broker but use different queues and topics — true multi-application architecture!
+    <br><br>
+    When you've built and tested this project, type <strong><code>/grill-me</code></strong> for an architecture interview or say <strong>"Start Lesson 08"</strong> to continue.
+  </div>
+
+  <div class="lesson-nav">
+    <a href="0006-topics-and-pub-sub-patterns.html">← Lesson 06: Topics & Pub/Sub</a>
+    <a href="0008-dead-letter-queues-and-error-handling.html">Next: Lesson 08 — Dead Letter Queues →</a>
+  </div>
+
+  <script src="../assets/quiz.js"></script>
+
+</body>
+</html>
