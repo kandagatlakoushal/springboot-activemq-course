@@ -8,6 +8,21 @@
 </head>
 <body>
 
+<nav class="top-nav">
+  <a href="../index.html" class="nav-btn home-btn" title="Course Index">🏠</a>
+  <div class="nav-pages">
+    <a href="0001-your-seven-day-roadmap.html" class="nav-btn " title="Day 1: Roadmap">1</a>
+    <a href="0002-jms-mental-model-and-activemq-setup.html" class="nav-btn " title="Day 1: JMS Mental Model">2</a>
+    <a href="0003-your-first-queue-send-and-receive.html" class="nav-btn " title="Day 1: First Queue">3</a>
+    <a href="0004-spring-profiles-environment-configuration.html" class="nav-btn active" title="Day 2: Profiles">4</a>
+    <a href="0005-json-messages-and-messageconverter.html" class="nav-btn " title="Day 2: JSON">5</a>
+    <a href="0006-topics-and-pub-sub-patterns.html" class="nav-btn " title="Day 3: Topics">6</a>
+    <a href="0007-building-the-order-processing-system.html" class="nav-btn " title="Day 3: Order Processing">7</a>
+  </div>
+</nav>
+
+  
+
   <div class="lesson-header">
     <span class="lesson-badge badge-beginner">Day 2</span>
     <h1>Spring Profiles: Environment Configuration</h1>
@@ -525,7 +540,7 @@ ARTEMIS_PROD_PASSWORD=admin \
 
   <h2>What's Next</h2>
 
-  <p>In <strong>Lesson 05</strong>, you'll upgrade your Notification Hub to send <strong>Java objects (POJOs) as JSON</strong> instead of plain strings. You'll configure <code>JacksonJsonMessageConverter</code> and learn what a <code>type ID</code> is and why the consumer needs it to deserialize messages.</p>
+  <p>In <strong>Lesson 05</strong>, you'll upgrade your Notification Hub to send <strong>Java objects (POJOs) as JSON</strong> instead of plain strings. You'll configure <code>MappingJackson2MessageConverter</code> and learn what a <code>type ID</code> is and why the consumer needs it to deserialize messages.</p>
 
   <!-- ============================================================ -->
 
@@ -537,6 +552,7 @@ ARTEMIS_PROD_PASSWORD=admin \
   </div>
 
   <div class="lesson-nav">
+    <a href="../index.html">🏠 Course Index</a>
     <a href="0003-your-first-queue-send-and-receive.html">← Lesson 03: First Queue</a>
     <a href="0005-json-messages-and-messageconverter.html">Next: Lesson 05 — JSON Messages →</a>
   </div>

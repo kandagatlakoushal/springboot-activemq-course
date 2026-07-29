@@ -8,6 +8,21 @@
 </head>
 <body>
 
+<nav class="top-nav">
+  <a href="../index.html" class="nav-btn home-btn" title="Course Index">🏠</a>
+  <div class="nav-pages">
+    <a href="0001-your-seven-day-roadmap.html" class="nav-btn " title="Day 1: Roadmap">1</a>
+    <a href="0002-jms-mental-model-and-activemq-setup.html" class="nav-btn " title="Day 1: JMS Mental Model">2</a>
+    <a href="0003-your-first-queue-send-and-receive.html" class="nav-btn " title="Day 1: First Queue">3</a>
+    <a href="0004-spring-profiles-environment-configuration.html" class="nav-btn " title="Day 2: Profiles">4</a>
+    <a href="0005-json-messages-and-messageconverter.html" class="nav-btn " title="Day 2: JSON">5</a>
+    <a href="0006-topics-and-pub-sub-patterns.html" class="nav-btn " title="Day 3: Topics">6</a>
+    <a href="0007-building-the-order-processing-system.html" class="nav-btn active" title="Day 3: Order Processing">7</a>
+  </div>
+</nav>
+
+  
+
   <div class="lesson-header">
     <span class="lesson-badge badge-intermediate">Day 3</span>
     <h1>Building the Order Processing System</h1>
@@ -292,7 +307,7 @@ logging:
 <span class="kw">import</span> org.springframework.context.annotation.Configuration;
 <span class="kw">import</span> org.springframework.jms.config.DefaultJmsListenerContainerFactory;
 <span class="kw">import</span> org.springframework.jms.config.JmsListenerContainerFactory;
-<span class="kw">import</span> org.springframework.jms.support.converter.JacksonJsonMessageConverter;
+<span class="kw">import</span> org.springframework.jms.support.converter.MappingJackson2MessageConverter;
 <span class="kw">import</span> org.springframework.jms.support.converter.MessageConverter;
 <span class="kw">import</span> org.springframework.jms.support.converter.MessageType;
 
@@ -301,7 +316,7 @@ logging:
 
     <span class="ann">@Bean</span>
     <span class="kw">public</span> <span class="typ">MessageConverter</span> jacksonJmsMessageConverter() {
-        <span class="typ">JacksonJsonMessageConverter</span> converter = <span class="kw">new</span> <span class="typ">JacksonJsonMessageConverter</span>();
+        <span class="typ">MappingJackson2MessageConverter</span> converter = <span class="kw">new</span> <span class="typ">MappingJackson2MessageConverter</span>();
         converter.setTargetType(MessageType.TEXT);
         converter.setTypeIdPropertyName(<span class="str">"_type"</span>);
         <span class="kw">return</span> converter;
@@ -634,7 +649,7 @@ wait</code></pre>
       <li data-correct data-explanation="The queue handles the reliable command: 'process this order exactly once.' The topic broadcasts the event: 'an order was placed — react if you care.' Different delivery guarantees for different purposes.">The queue guarantees exactly-once processing (command: 'process this order'), while the topic broadcasts the event to all interested services (event: 'order was placed')</li>
       <li>Using both is required by the JMS specification when sending messages larger than 1KB in size</li>
       <li>The queue is for internal services and the topic is exclusively for external third-party consumers</li>
-      <li>Spring Boot requires both a queue and topic for the JacksonJsonMessageConverter to work correctly</li>
+      <li>Spring Boot requires both a queue and topic for the MappingJackson2MessageConverter to work correctly</li>
     </ul>
     <div class="quiz-feedback"></div>
   </div>
@@ -689,6 +704,7 @@ wait</code></pre>
   </div>
 
   <div class="lesson-nav">
+    <a href="../index.html">🏠 Course Index</a>
     <a href="0006-topics-and-pub-sub-patterns.html">← Lesson 06: Topics & Pub/Sub</a>
     <a href="0008-dead-letter-queues-and-error-handling.html">Next: Lesson 08 — Dead Letter Queues →</a>
   </div>

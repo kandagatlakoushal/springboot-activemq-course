@@ -7,6 +7,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jms.core.JmsTemplate;
 import org.springframework.stereotype.Service;
 
+import com.learningPath.springProfileAmq.NotificationHub.model.NotificationMessage;
+
 @Service
 public class NotificationSender {
 
@@ -20,10 +22,10 @@ public class NotificationSender {
         this.jmsTemplate = jmsTemplate;
     }
 
-    public void send(String message) {
+    public void send(NotificationMessage message) {
         log.info("📤 Sending to [{}]: {}", queueName, message);
         jmsTemplate.convertAndSend(queueName, message);
-        log.info("✅ Message sent successfully");
+        log.info("✅ JSON Message dispatched to broker successfully");
 
     }
 
