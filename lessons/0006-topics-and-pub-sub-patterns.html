@@ -223,7 +223,7 @@ app:
 <span class="kw">import</span> org.springframework.context.annotation.Configuration;
 <span class="kw">import</span> org.springframework.jms.config.DefaultJmsListenerContainerFactory;
 <span class="kw">import</span> org.springframework.jms.config.JmsListenerContainerFactory;
-<span class="kw">import</span> org.springframework.jms.support.converter.MappingJackson2MessageConverter;
+<span class="kw">import</span> org.springframework.jms.support.converter.JacksonJsonMessageConverter;
 <span class="kw">import</span> org.springframework.jms.support.converter.MessageConverter;
 <span class="kw">import</span> org.springframework.jms.support.converter.MessageType;
 
@@ -233,7 +233,7 @@ app:
     <span class="cmt">// Existing bean from Lesson 05 — JSON message conversion</span>
     <span class="ann">@Bean</span>
     <span class="kw">public</span> <span class="typ">MessageConverter</span> jacksonJmsMessageConverter() {
-        <span class="typ">MappingJackson2MessageConverter</span> converter = <span class="kw">new</span> <span class="typ">MappingJackson2MessageConverter</span>();
+        <span class="typ">JacksonJsonMessageConverter</span> converter = <span class="kw">new</span> <span class="typ">JacksonJsonMessageConverter</span>();
         converter.setTargetType(MessageType.TEXT);
         converter.setTypeIdPropertyName(<span class="str">"_type"</span>);
         <span class="kw">return</span> converter;

@@ -292,7 +292,7 @@ logging:
 <span class="kw">import</span> org.springframework.context.annotation.Configuration;
 <span class="kw">import</span> org.springframework.jms.config.DefaultJmsListenerContainerFactory;
 <span class="kw">import</span> org.springframework.jms.config.JmsListenerContainerFactory;
-<span class="kw">import</span> org.springframework.jms.support.converter.MappingJackson2MessageConverter;
+<span class="kw">import</span> org.springframework.jms.support.converter.JacksonJsonMessageConverter;
 <span class="kw">import</span> org.springframework.jms.support.converter.MessageConverter;
 <span class="kw">import</span> org.springframework.jms.support.converter.MessageType;
 
@@ -301,7 +301,7 @@ logging:
 
     <span class="ann">@Bean</span>
     <span class="kw">public</span> <span class="typ">MessageConverter</span> jacksonJmsMessageConverter() {
-        <span class="typ">MappingJackson2MessageConverter</span> converter = <span class="kw">new</span> <span class="typ">MappingJackson2MessageConverter</span>();
+        <span class="typ">JacksonJsonMessageConverter</span> converter = <span class="kw">new</span> <span class="typ">JacksonJsonMessageConverter</span>();
         converter.setTargetType(MessageType.TEXT);
         converter.setTypeIdPropertyName(<span class="str">"_type"</span>);
         <span class="kw">return</span> converter;
@@ -634,7 +634,7 @@ wait</code></pre>
       <li data-correct data-explanation="The queue handles the reliable command: 'process this order exactly once.' The topic broadcasts the event: 'an order was placed — react if you care.' Different delivery guarantees for different purposes.">The queue guarantees exactly-once processing (command: 'process this order'), while the topic broadcasts the event to all interested services (event: 'order was placed')</li>
       <li>Using both is required by the JMS specification when sending messages larger than 1KB in size</li>
       <li>The queue is for internal services and the topic is exclusively for external third-party consumers</li>
-      <li>Spring Boot requires both a queue and topic for the MappingJackson2MessageConverter to work correctly</li>
+      <li>Spring Boot requires both a queue and topic for the JacksonJsonMessageConverter to work correctly</li>
     </ul>
     <div class="quiz-feedback"></div>
   </div>

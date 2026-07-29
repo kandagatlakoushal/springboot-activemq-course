@@ -25,7 +25,7 @@
 
   <ul>
     <li>Why raw <code>String</code> messages and Java native serialization (<code>ObjectMessage</code>) are banned in modern enterprise architectures</li>
-    <li>How <code>MappingJackson2MessageConverter</code> works under the hood (the serialization/deserialization pipeline)</li>
+    <li>How <code>JacksonJsonMessageConverter</code> works under the hood (the serialization/deserialization pipeline)</li>
     <li>What the <code>_type</code> property header is and why Artemis needs it to route data to Java POJOs</li>
     <li>Step-by-step refactoring of your Notification Hub to send structured <code>NotificationMessage</code> objects</li>
     <li>How interoperability works: allowing Python, Go, or Node.js services to consume your Spring Boot messages</li>
@@ -74,14 +74,14 @@
 
   <div class="callout callout-danger">
     <div class="callout-label">Interview Insight</div>
-    <p>"If an interviewer asks: 'How do you send domain objects over ActiveMQ Artemis?', never say 'implement Serializable and send an ObjectMessage.' The correct enterprise answer is: 'We configure a <code>MappingJackson2MessageConverter</code> bean to serialize POJOs into JSON text payloads (<code>TextMessage</code>) with type header metadata. This guarantees cross-language interoperability and prevents deserialization CVEs.'"</p>
+    <p>"If an interviewer asks: 'How do you send domain objects over ActiveMQ Artemis?', never say 'implement Serializable and send an ObjectMessage.' The correct enterprise answer is: 'We configure a <code>JacksonJsonMessageConverter</code> bean to serialize POJOs into JSON text payloads (<code>TextMessage</code>) with type header metadata. This guarantees cross-language interoperability and prevents deserialization CVEs.'"</p>
   </div>
 
   <!-- ============================================================ -->
 
   <h2>Part 2: The JSON Conversion Pipeline Under the Hood</h2>
 
-  <p>When you configure Spring's <code>MappingJackson2MessageConverter</code>, the message flow transforms completely. Let's trace the physical infrastructure journey:</p>
+  <p>When you configure Spring's <code>JacksonJsonMessageConverter</code>, the message flow transforms completely. Let's trace the physical infrastructure journey:</p>
 
   <div class="diagram">
     <pre><code>
@@ -94,7 +94,7 @@
   1. jmsTemplate.convertAndSend("notification.queue", notificationObj);
          │
          ▼
-  2. MappingJackson2MessageConverter intercepts the POJO
+  2. JacksonJsonMessageConverter intercepts the POJO
          │  ├─ Uses Jackson ObjectMapper to serialize POJO → JSON String
          │  ├─ Creates a Jakarta JMS TextMessage containing the JSON payload
          │  └─ Sets a custom JMS Header Property: 
@@ -109,7 +109,7 @@
   4. Consumer Thread receives TextMessage via TCP
          │
          ▼
-  5. @JmsListener container invokes MappingJackson2MessageConverter
+  5. @JmsListener container invokes JacksonJsonMessageConverter
          │  ├─ Reads the "_type" string property from JMS headers
          │  ├─ Loads the target Java Class using ClassLoader
          │  └─ Uses Jackson ObjectMapper to deserialize JSON String → Java POJO
@@ -197,7 +197,7 @@
 
 <span class="kw">import</span> org.springframework.context.annotation.Bean;
 <span class="kw">import</span> org.springframework.context.annotation.Configuration;
-<span class="kw">import</span> org.springframework.jms.support.converter.MappingJackson2MessageConverter;
+<span class="kw">import</span> org.springframework.jms.support.converter.JacksonJsonMessageConverter;
 <span class="kw">import</span> org.springframework.jms.support.converter.MessageConverter;
 <span class="kw">import</span> org.springframework.jms.support.converter.MessageType;
 
@@ -206,7 +206,7 @@
 
     <span class="ann">@Bean</span>
     <span class="kw">public</span> <span class="typ">MessageConverter</span> jacksonJmsMessageConverter() {
-        <span class="typ">MappingJackson2MessageConverter</span> converter = <span class="kw">new</span> <span class="typ">MappingJackson2MessageConverter</span>();
+        <span class="typ">JacksonJsonMessageConverter</span> converter = <span class="kw">new</span> <span class="typ">JacksonJsonMessageConverter</span>();
         
         <span class="cmt">// 1. Tell converter to wrap JSON in a jakarta.jms.TextMessage (not BytesMessage)</span>
         converter.setTargetType(MessageType.TEXT);
@@ -217,6 +217,11 @@
         <span class="kw">return</span> converter;
     }
 }</code></pre>
+
+  <div class="callout callout-warning">
+    <div class="callout-label">Spring 6.1 / Boot 3.2+ Deprecation Note</div>
+    <p>If you see older tutorials using <code>MappingJackson2MessageConverter</code>, be aware that it was <strong>deprecated</strong> in Spring Framework 6.1 (for removal in 7.0). Spring is migrating towards Jackson 3 support, so the modern, future-proof class to use is <code>JacksonJsonMessageConverter</code>. They work identically!</p>
+  </div>
 
   <div class="callout callout-info">
     <div class="callout-label">How Auto-Configuration Interacts With This Bean</div>
@@ -252,7 +257,7 @@
     <span class="kw">public void</span> send(<span class="typ">NotificationMessage</span> message) {
         log.info(<span class="str">"📤 Sending JSON Object to [{}]: {}"</span>, queueName, message);
         
-        <span class="cmt">// Spring automagically invokes our MappingJackson2MessageConverter here!</span>
+        <span class="cmt">// Spring automagically invokes our JacksonJsonMessageConverter here!</span>
         jmsTemplate.convertAndSend(queueName, message);
         
         log.info(<span class="str">"✅ JSON Message dispatched to broker successfully"</span>);
@@ -398,7 +403,7 @@
   </div>
 
   <div class="quiz" data-quiz="q2">
-    <p class="quiz-question">How does <code>MappingJackson2MessageConverter</code> let the receiving Spring Boot app know which class to deserialize the incoming JSON payload into?</p>
+    <p class="quiz-question">How does <code>JacksonJsonMessageConverter</code> let the receiving Spring Boot app know which class to deserialize the incoming JSON payload into?</p>
     <ul class="quiz-options">
       <li data-correct data-explanation="When serializing, the converter injects a custom JMS String property named '_type' into the message headers containing the fully qualified class name.">It sets a custom JMS String property named <code>_type</code> in the message headers containing the fully qualified Java class name</li>
       <li>It encodes the Java class name directly into the first 50 bytes of the JSON payload string itself</li>
@@ -436,7 +441,7 @@
 
   <ul>
     <li>✅ Explain why enterprise systems ban Java native serialization (CVEs, language lock-in, fragility)</li>
-    <li>✅ Configure <code>MappingJackson2MessageConverter</code> with <code>MessageType.TEXT</code> and <code>_type</code> property ID</li>
+    <li>✅ Configure <code>JacksonJsonMessageConverter</code> with <code>MessageType.TEXT</code> and <code>_type</code> property ID</li>
     <li>✅ Refactor a raw String messaging system into a typed POJO JSON pipeline</li>
     <li>✅ Verify JSON payloads and header properties inside the ActiveMQ Artemis Web Console</li>
     <li>✅ Avoid the missing default constructor trap during Jackson deserialization</li>
