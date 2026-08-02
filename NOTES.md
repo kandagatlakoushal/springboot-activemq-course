@@ -61,3 +61,9 @@
   - User requested infrastructure grounding → added Infrastructure Foundations section to Lesson 01 (services, brokers, deployment, ports, TCP, REST vs Messaging comparison)
   - Recorded infrastructure-first teaching preference
   - Next: Lesson 02 (JMS Mental Model & ActiveMQ Setup)
+- **Session — Exgester path created** (2026-08-02):
+  - 🎉 User now works at S&P Global MI (Cappitech) — this workspace's original mission is effectively ACCOMPLISHED
+  - New nested teaching workspace created: `ExgesterLearningPath/` with its own MISSION, CURRICULUM (5 weeks / 30 sessions), INSTRUCTION-MANUAL, PROMPT-LIBRARY, RESOURCES, NOTES, baseline learning record, and orientation Lesson 0001
+  - Exgester = Spring Boot event-driven trade reporting engine (AMQ in → Vavr Either railway decision engine → regulatory submissions out; multi-tenant via custom @Profile annotations)
+  - Exgester lessons reuse shared `assets/style.css` + `assets/quiz.js` via `../../assets/`
+  - Remaining AMQ lessons (08–14) are still valuable — DLQs, advanced profiles, testing overlap with Exgester Weeks 4–5; fold in on demand

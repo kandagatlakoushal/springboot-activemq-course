@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Exgester 01 — The Exgester Mental Model &amp; Your 5-Week Roadmap</title>
+  <link rel="stylesheet" href="../../assets/style.css">
+</head>
+<body>
+
+<nav class="top-nav">
+  <a href="../ExgesterModule.md" class="nav-btn home-btn" title="Exgester Path Index">🏠</a>
+  <div class="nav-pages">
+    <a href="0001-exgester-mental-model-and-roadmap.html" class="nav-btn active" title="Orientation">1</a>
+  </div>
+</nav>
+
+  <div class="lesson-header">
+    <span class="lesson-badge badge-beginner">Orientation</span>
+    <h1>The Exgester Mental Model &amp; Your 5-Week Roadmap</h1>
+    <p>Before touching a single API — build the map of the machine you now maintain</p>
+    <div class="lesson-meta">
+      <span>📅 Lesson 01 — Exgester Path</span>
+      <span>⏱ 30 min read</span>
+      <span>🎯 Outcome: you can draw Exgester on a whiteboard</span>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>What You'll Learn</h2>
+  <ul>
+    <li>What a <strong>trade reporting engine</strong> actually does, and why banks are legally forced to run one</li>
+    <li>The three-stage mental model: <strong>Trade Event → Decision Engine → Regulatory Submission</strong></li>
+    <li>Why Exgester's decision pipelines are built as <strong>railways</strong> (two tracks: success and failure)</li>
+    <li>How ONE Spring Boot application serves <strong>many banks</strong> without their flows colliding</li>
+    <li>The 5-week route from where you are to confidently modifying Exgester</li>
+  </ul>
+
+  <div class="callout callout-success">
+    <div class="callout-label">Primary Resource</div>
+    <p><a href="https://fsharpforfunandprofit.com/rop/">Railway Oriented Programming — Scott Wlaschin</a> — bookmark it now. You'll study it properly in Week 2, but skimming the slide deck today plants the single most important idea of this course.</p>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Part 1: Why Exgester Exists (The Business Reality)</h2>
+
+  <p>After the 2008 financial crisis, regulators worldwide decided they wanted to <em>see</em> the derivatives market. Laws like <strong>EMIR</strong> (EU), <strong>UK EMIR / FCA</strong> (Britain), <strong>ASIC</strong> (Australia) and <strong>CFTC / Dodd-Frank</strong> (US) all say roughly the same thing:</p>
+
+  <div class="callout callout-info">
+    <div class="callout-label">The Regulatory Deal</div>
+    <p>"Every time you trade a derivative, you must report the details to an authorized trade repository — accurately, in our prescribed format, within our deadline. Fail, and you're fined."</p>
+  </div>
+
+  <p>A bank like ANZ or Wells Fargo executes thousands of trades a day, each potentially reportable under <em>multiple</em> regimes at once (an Australian bank trading with an EU counterparty may owe both ASIC <em>and</em> EMIR reports). Doing this manually is impossible. Doing it wrong is expensive. That is the product: <a href="https://www.spglobal.com/market-intelligence/en/solutions/regulatory-compliance-and-reporting">Cappitech regulatory reporting</a> — and Exgester is the engine room.</p>
+
+  <h2>Part 2: The Three-Stage Mental Model</h2>
+
+  <div class="diagram">
+    <pre><code>
+  EXGESTER: THE MACHINE
+  ═════════════════════
+
+  ┌────────────┐     ┌──────────────────────────────┐     ┌──────────────────┐
+  │ TRADE      │     │ DECISION ENGINE              │     │ REGULATORY       │
+  │ EVENT      │ ──→ │                              │ ──→ │ SUBMISSION       │
+  │            │     │ 1. Eligible for reporting?   │     │                  │
+  │ JSON msg   │     │ 2. Which regimes? EMIR? ASIC?│     │ Formatted msg    │
+  │ on an AMQ  │     │ 3. Enrich (LEI, UTI, venue)  │     │ per regime, sent │
+  │ queue      │     │ 4. Validate all fields       │     │ downstream       │
+  └────────────┘     └──────────────────────────────┘     └──────────────────┘
+       edge                    pure core                        edge
+   (messaging I/O)      (decisions, no I/O)               (messaging I/O)
+    </code></pre>
+  </div>
+
+  <p>Burn this in: <strong>messaging at the edges, decisions in the core</strong>. The core never talks to a queue, never logs-and-swallows, never surprises you. That separation is what makes Exgester testable — and it's a discipline called <em>side-effect isolation</em> that you'll practice in Week 2.</p>
+
+  <h2>Part 3: The Railway (Preview of the Most Important Idea)</h2>
+
+  <p>What happens when step 2 of the decision engine says "this trade is out of scope"? Or step 4 finds a missing LEI? Exgester does <strong>not</strong> throw exceptions for this. Business rejections aren't exceptional — they're half the job.</p>
+
+  <p>Instead, every pipeline step returns a Vavr <code>Either&lt;RejectionReason, Trade&gt;</code>: a value that is <em>either</em> a failure (<code>Left</code>) <em>or</em> a success (<code>Right</code>). Steps chain like railway segments:</p>
+
+  <div class="diagram">
+    <pre><code>
+  THE TWO-TRACK RAILWAY
+  ═════════════════════
+
+  Success track ──→ [eligibility] ──→ [regimes] ──→ [enrich] ──→ [validate] ──→ SUBMIT
+                        │                │             │            │
+                        ╰── Left ────────┴──── Left ───┴─── Left ───┴──→ REJECT
+                            (reason)                                     (with reason)
+
+  The FIRST failure switches the train to the bottom track.
+  All remaining steps are skipped. The reason travels to the end.
+    </code></pre>
+  </div>
+
+  <p>One <code>fold(...)</code> at the end routes the train: submissions go downstream, rejections go to an audit/rejection queue. No try/catch pyramids, no null checks, no half-processed state. This is <a href="https://fsharpforfunandprofit.com/rop/">railway-oriented programming</a>, and by Session 12 you will write these pipelines fluently.</p>
+
+  <h2>Part 4: One Engine, Many Banks</h2>
+
+  <p>Exgester serves ANZ, Westpac (WBC), Santander, Wells Fargo and more — from <strong>one codebase</strong>. Each client runs as its own deployment with its own Spring profile:</p>
+
+  <pre data-lang="java"><code><span class="cmt">// A custom composed annotation — this is the real Exgester pattern</span>
+<span class="ann">@Target</span>(ElementType.TYPE)
+<span class="ann">@Retention</span>(RetentionPolicy.RUNTIME)
+<span class="ann">@Profile</span>(<span class="str">"anz"</span>)
+<span class="kw">public @interface</span> <span class="typ">AnzProfile</span> {}
+
+<span class="cmt">// Beans annotated @AnzProfile exist ONLY when the app boots as ANZ</span>
+<span class="ann">@Service</span>
+<span class="ann">@AnzProfile</span>
+<span class="kw">public class</span> <span class="typ">AnzEligibilityRules</span> <span class="kw">implements</span> <span class="typ">EligibilityRules</span> { ... }</code></pre>
+
+  <p>Add per-client YAML (<code>application-anz.yml</code>: which regimes are on, which queues to use, feature flags) and you get the multi-tenant architecture: <strong>common flows shared, client flows swapped in by profile</strong>. Week 4 is devoted to building this with your own hands.</p>
+
+  <div class="callout callout-warning">
+    <div class="callout-label">Ground Rule</div>
+    <p>Never paste proprietary Exgester code into this workspace or into the agent. We learn on <strong>Mini-Exgester</strong> — an open reconstruction you build yourself. Validate its shapes against the real code <em>at work, with your team</em>.</p>
+  </div>
+
+  <h2>Part 5: Your 5-Week Route</h2>
+
+  <div class="card">
+    <p><strong>Week 1 — Modern Java.</strong> Immutability, generics, lambdas, streams, Optional, SOLID. <em>Why first:</em> <code>Either&lt;L,R&gt;</code> signatures are unreadable without generics fluency; pipelines are functions composed of functions.</p>
+    <p><strong>Week 2 — FP &amp; Vavr.</strong> Option, Try, Tuple, then Either and railway-oriented programming. You build the Mini-Exgester decision engine. <em>The heart of the course.</em></p>
+    <p><strong>Week 3 — Design Patterns.</strong> Strategy, Factory, Builder, Template Method, Chain of Responsibility, Composite — each landed in the engine, not in toy zoo examples.</p>
+    <p><strong>Week 4 — Multi-Tenant Spring.</strong> Constructor injection, custom @Profile annotations, YAML config binding, Jackson deep-dive, JMS wired to the engine.</p>
+    <p><strong>Week 5 — Testing &amp; Quality.</strong> JUnit + AssertJ + Mockito, Cucumber BDD, Maven/JaCoCo/Checkstyle gates, Docker Compose, capstone assembly, final grill.</p>
+  </div>
+
+  <p>Full session-by-session detail lives in <a href="../CURRICULUM.md">CURRICULUM.md</a>. The daily ritual and rules live in <a href="../INSTRUCTION-MANUAL.md">INSTRUCTION-MANUAL.md</a>. The prompts that drive each session live in <a href="../PROMPT-LIBRARY.md">PROMPT-LIBRARY.md</a>.</p>
+
+  <!-- ============================================================ -->
+
+  <h2>Check Your Understanding</h2>
+
+  <div class="quiz" data-quiz="exg01-q1">
+    <p class="quiz-question">A trade fails the eligibility check in step 1 of a 4-step railway pipeline. What happens to steps 2–4?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="The first Left switches to the failure track; remaining steps are bypassed entirely.">They are skipped; the Left rides to the end</li>
+      <li>They run anyway; the Left flag is checked last</li>
+      <li>They each throw and log its own exception</li>
+      <li>They run in parallel on the failure track</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <div class="quiz" data-quiz="exg01-q2">
+    <p class="quiz-question">Why does Exgester avoid exceptions for business rejections like "trade out of scope"?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="Rejections are expected outcomes, so they're modeled as values (Left) that compose in pipelines.">Rejections are normal outcomes, modeled as values</li>
+      <li>Exceptions are slower than returning any value</li>
+      <li>Spring Boot cannot catch checked JMS exceptions</li>
+      <li>Regulators forbid exception logging in engines</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <div class="quiz" data-quiz="exg01-q3">
+    <p class="quiz-question">How does one Exgester codebase serve both ANZ and Wells Fargo with different flows?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="Client beans carry composed @Profile annotations; each deployment boots with its client profile + YAML.">Profile-gated beans plus per-client YAML config</li>
+      <li>Separate git branches maintained for each bank</li>
+      <li>Runtime if/else checks on a client name field</li>
+      <li>Each bank gets its own recompiled artifact</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <div class="quiz" data-quiz="exg01-q4">
+    <p class="quiz-question">Where do side effects (queues, logging) belong in the Exgester architecture?</p>
+    <ul class="quiz-options">
+      <li data-correct data-explanation="Edges handle I/O; the decision core stays pure so it can be tested without infrastructure.">At the edges; the decision core stays pure</li>
+      <li>Inside each pipeline step for full auditing</li>
+      <li>In a global aspect that wraps every method</li>
+      <li>Nowhere; the engine avoids all side effects</li>
+    </ul>
+    <div class="quiz-feedback"></div>
+  </div>
+
+  <!-- ============================================================ -->
+
+  <h2>Your Task Before Session 1</h2>
+  <ol>
+    <li>Skim the <a href="https://fsharpforfunandprofit.com/rop/">Railway Oriented Programming slides</a> (20 min, don't sweat the F# syntax — absorb the two-track pictures)</li>
+    <li>Read <a href="../CURRICULUM.md">CURRICULUM.md</a> end to end (10 min)</li>
+    <li>At work (no code leaves the building!): find one <code>Either</code> pipeline in Exgester and simply count its steps. That number is your motivation.</li>
+  </ol>
+
+  <div class="teacher-prompt">
+    <strong>💬 Ask your teacher.</strong> Anything unclear — the railway metaphor, what a regime is, why immutability matters for messages — ask the agent right in this workspace. Use the prompts in <a href="../PROMPT-LIBRARY.md">PROMPT-LIBRARY.md</a> to start Session 1 when ready.
+  </div>
+
+  <div class="lesson-nav">
+    <a href="../ExgesterModule.md">← Path Index</a>
+    <a href="../CURRICULUM.md">Curriculum →</a>
+  </div>
+
+<script src="../../assets/quiz.js"></script>
+</body>
+</html>
